@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { failure, success, type ActionResult } from "@/lib/action-result";
+import { requireAccess } from "@/lib/actions/guard";
 import { SourceKey, type SourceKey as SourceKeyType } from "@/lib/db/enums";
 import type { RunOutcome } from "@/lib/refresh/run-task";
 import { refreshCorporateEvents } from "@/lib/refresh/tasks/corporate-events";
@@ -57,6 +58,9 @@ async function dispatch(source: SourceKeyType): Promise<RunOutcome> {
 }
 
 export async function refreshSource(rawSource: string): Promise<ActionResult<{ message: string }>> {
+  const denied = await requireAccess();
+  if (denied) return denied;
+
   const parsed = SourceKey.schema.safeParse(rawSource);
   if (!parsed.success) return failure("Unknown source.");
   const source = parsed.data;

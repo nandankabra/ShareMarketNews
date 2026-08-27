@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { failure, success, type ActionResult } from "@/lib/action-result";
+import { requireAccess } from "@/lib/actions/guard";
 import { prisma } from "@/lib/prisma";
 import { ProviderError } from "@/lib/providers/errors";
 import { fetchChart, searchShares } from "@/lib/providers/yahoo";
@@ -31,6 +32,9 @@ function refresh(): void {
  * every later number wrong.
  */
 export async function addToWatchlist(rawSymbol: string): Promise<ActionResult<{ symbol: string }>> {
+  const denied = await requireAccess();
+  if (denied) return denied;
+
   const parsed = symbolSchema.safeParse(rawSymbol);
   if (!parsed.success) return failure(parsed.error.issues[0]?.message ?? "Invalid symbol");
   const symbol = parsed.data;
@@ -99,6 +103,9 @@ export async function addToWatchlist(rawSymbol: string): Promise<ActionResult<{ 
 }
 
 export async function removeFromWatchlist(shareId: string): Promise<ActionResult> {
+  const denied = await requireAccess();
+  if (denied) return denied;
+
   const deleted = await prisma.watchlistItem.deleteMany({ where: { shareId } });
   if (deleted.count === 0) return failure("That share was not on your watchlist.");
   refresh();
@@ -108,6 +115,9 @@ export async function removeFromWatchlist(shareId: string): Promise<ActionResult
 const noteSchema = z.string().trim().max(200, "Keep the note under 200 characters");
 
 export async function updateWatchlistNote(shareId: string, rawNote: string): Promise<ActionResult> {
+  const denied = await requireAccess();
+  if (denied) return denied;
+
   const parsed = noteSchema.safeParse(rawNote);
   if (!parsed.success) return failure(parsed.error.issues[0]?.message ?? "Invalid note");
 
@@ -128,6 +138,9 @@ export async function updateWatchlistNote(shareId: string, rawNote: string): Pro
  * movement column has nothing to measure from.
  */
 export async function resetAddedPrice(shareId: string): Promise<ActionResult> {
+  const denied = await requireAccess();
+  if (denied) return denied;
+
   const share = await prisma.share.findUnique({ where: { id: shareId } });
   if (!share) return failure("Unknown share.");
   if (share.lastPrice == null) return failure("No quote available to measure from yet.");

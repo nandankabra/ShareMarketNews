@@ -32,6 +32,14 @@ npm run poller     # second terminal — keeps it current
 - [`docs/SETUP.md`](docs/SETUP.md) — running it, and what to do when something is missing
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — why it is shaped this way
 - [`docs/HOSTING.md`](docs/HOSTING.md) — hosting it free, and the NSE constraint that decides how
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — the go-live checklist
+
+## Deploying
+
+Set `ACCESS_PASSWORD` before you do. The panel has no user model by design, and
+without a password anyone who finds the URL can edit your watchlist and trigger
+refreshes against the upstream providers from your deployment. Locally, leave it
+unset — no password means no gate.
 
 ## Not advice
 

@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "6.19.3",
+    "@prisma/adapter-libsql": "^6.19.3",
     "@prisma/client": "6.19.3",
     "better-sqlite3": "^12.6.0",
     "class-variance-authority": "^0.7.1",

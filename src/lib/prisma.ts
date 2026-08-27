@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { PrismaBetterSQLite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import { PrismaClient } from "@prisma/client";
 
 import { env } from "@/env";
@@ -40,15 +41,25 @@ function resolveDatabaseUrl(url: string): string {
  * @prisma/adapter-libsql, where both become the server's problem.
  */
 function createClient(): PrismaClient {
-  const adapter = new PrismaBetterSQLite3({
-    url: resolveDatabaseUrl(env.DATABASE_URL),
-    timeout: 5_000,
-  });
+  // libSQL *is* SQLite, so nothing about the schema changes between the two —
+  // same provider, same absent enums and JSON. Only the transport differs, and
+  // with it who is responsible for concurrency: the pragmas below are ours to
+  // set on a local file and Turso's problem on a remote one.
+  const remote = env.DATABASE_URL.startsWith("libsql:") || env.DATABASE_URL.startsWith("https:");
+
+  const adapter = remote
+    ? new PrismaLibSQL({ url: env.DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN })
+    : new PrismaBetterSQLite3({ url: resolveDatabaseUrl(env.DATABASE_URL), timeout: 5_000 });
 
   return new PrismaClient({
     adapter,
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
+}
+
+/** True when this process is talking to a hosted database rather than a file. */
+export function isRemoteDatabase(): boolean {
+  return env.DATABASE_URL.startsWith("libsql:") || env.DATABASE_URL.startsWith("https:");
 }
 
 const globalForPrisma = globalThis as unknown as {
@@ -69,6 +80,9 @@ if (process.env.NODE_ENV !== "production") {
  */
 export function ensurePragmas(): Promise<void> {
   globalForPrisma.prismaPragmas ??= (async () => {
+    // Meaningless against Turso, which manages its own concurrency.
+    if (isRemoteDatabase()) return;
+
     try {
       await prisma.$executeRawUnsafe("PRAGMA journal_mode = WAL");
       // NORMAL rather than FULL: one fsync per checkpoint instead of one per

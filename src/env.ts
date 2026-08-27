@@ -38,6 +38,9 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   TURSO_AUTH_TOKEN: z.string().optional(),
 
+  /** Unset means the access gate is off — correct for localhost. */
+  ACCESS_PASSWORD: z.string().optional(),
+
   POLLER_TICK_MS: numeric(60_000),
   QUOTE_BUDGET_PER_TICK: numeric(20),
   NEWS_BUDGET_PER_RUN: numeric(10),
