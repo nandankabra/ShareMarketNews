@@ -1,0 +1,415 @@
+// Market Watch Desk — schema
+//
+// SQLite (via libSQL in production) has no enums, no JSON column type and no
+// date type. Every place watermark's Postgres schema would use one, this uses a
+// String with a TypeScript union in src/lib/db/enums.ts and a zod guard at the
+// boundary. Calendar dates are stored as "YYYY-MM-DD" IST day keys, which is
+// not a workaround but an improvement: it removes the UTC-midnight trap where a
+// UTC server flips "today" at 18:30 IST, three hours after the market closes.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// --- Reference data -------------------------------------------------------
+
+/// One of NSE's sectoral indices. Seeded from a hand-verified table rather than
+/// discovered, because the index-name to constituents-file mapping cannot be
+/// derived and a wrong filename fails silently with an HTML page.
+model Sector {
+  id          String  @id @default(cuid())
+  key         String  @unique /// URL slug, e.g. "it"
+  name        String  @unique /// Exact NSE index name, e.g. "NIFTY IT"
+  displayName String /// Human label, e.g. "Information Technology"
+
+  /// niftyindices.com constituent file stem, e.g. "ind_niftyitlist". Null where
+  /// no file has been verified — the sector still exists, it just cannot sync.
+  constituentsFile String?
+
+  sortIndex Int @default(0)
+
+  lastLevel            Float?
+  lastChangePercent    Float?
+  levelAt              DateTime?
+  constituentsSyncedAt DateTime?
+
+  memberships SectorMembership[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortIndex])
+}
+
+/// A tradable share. The canonical key is the uppercase NSE symbol.
+model Share {
+  id     String @id @default(cuid())
+  symbol String @unique /// NSE trading symbol, e.g. "TCS", "M&M"
+
+  /// Almost always `${symbol}.NS`, but stored rather than derived: a handful
+  /// diverge, and the "&" in symbols like M&M must be URL-encoded exactly once.
+  /// Deriving it at each call site is how one of them ends up double-encoded.
+  yahooSymbol String @unique
+
+  name          String
+  isin          String?
+  series        String?
+  industry      String? /// From the constituents CSV
+  yahooSector   String?
+  yahooIndustry String?
+
+  // Latest quote, denormalized onto the row rather than kept in a LatestQuote
+  // table. It is 1:1 and never optional in practice, and every screen that
+  // lists shares (sector grid, watchlist, briefing) would otherwise pay a join
+  // for 20-70 rows. History has a proper home in PriceSnapshot. A separate
+  // table would be right if quotes arrived from several providers needing
+  // per-field provenance; there is exactly one quote provider.
+  lastPrice        Float?
+  previousClose    Float?
+  dayChange        Float?
+  dayChangePercent Float?
+  dayHigh          Float?
+  dayLow           Float?
+  week52High       Float?
+  week52Low        Float?
+  /// Float, not BigInt: doubles are exact to 2^53 and NSE volumes never come
+  /// close, while BigInt fails to serialize across the RSC boundary.
+  volume           Float?
+  currency         String  @default("INR")
+  quotedAt         DateTime?
+
+  // Rolling stats, so the notice scorer never scans a time series per row.
+  avgAbsChangePercent20d Float?
+  avgVolume20d           Float?
+  statsAt                DateTime?
+
+  // Denormalized indicators, recomputed by the daily snapshot task right after
+  // the bars land. Same reasoning as the quote columns.
+  rsi14      Float?
+  atr14      Float?
+  atrPercent Float?
+  sma20      Float?
+  sma50      Float?
+  sma200     Float?
+  macdHist   Float?
+  trendState String? /// TrendState: ABOVE_200 | BELOW_200 | UNKNOWN
+  taAt       DateTime?
+
+  /// Support/resistance zones as JSON text (SQLite has no JSON type). Computed
+  /// daily, not per request: clustering 250 bars of pivots on every page load
+  /// would be the most expensive thing the app does.
+  levelsJson String?
+  levelsAt   DateTime?
+
+  /// This share's own moves on its heaviest-news days, as JSON text. The
+  /// factual basis for "how much does this share move on news like this" —
+  /// never a forecast.
+  newsDayMovePct String?
+
+  /// Set after repeated Yahoo NOT_FOUNDs; the poller then skips it for good.
+  quoteUnavailable Boolean @default(false)
+  notFoundCount    Int     @default(0)
+
+  /// Stamped by the sector page, promotes the share into refresh tier B.
+  lastViewedAt DateTime?
+
+  memberships SectorMembership[]
+  snapshots   PriceSnapshot[]
+  mentions    ShareNewsMention[]
+  events      CorporateEvent[]
+  watchlist   WatchlistItem?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([quotedAt])
+  @@index([lastViewedAt])
+  @@index([quoteUnavailable])
+}
+
+/// Explicit join model rather than an implicit m-n relation, because the
+/// membership itself carries data.
+model SectorMembership {
+  id       String @id @default(cuid())
+  sectorId String
+  shareId  String
+
+  source String /// MembershipSource: INDEX_CSV | YAHOO_SEARCH | MANUAL
+
+  /// Stamped on every successful CSV sync. Rows unseen for 7 days are pruned,
+  /// so an index reconstitution eventually lands — but one failed fetch cannot
+  /// empty a sector.
+  lastSeenAt DateTime @default(now())
+
+  sector Sector @relation(fields: [sectorId], references: [id], onDelete: Cascade)
+  share  Share  @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([sectorId, shareId])
+  @@index([shareId])
+  @@index([lastSeenAt])
+}
+
+// --- Time series ----------------------------------------------------------
+
+model PriceSnapshot {
+  id       String @id @default(cuid())
+  shareId  String
+  interval String /// PriceInterval: DAILY | INTRADAY
+  at       DateTime /// Bar start; DAILY normalised to IST midnight
+
+  open   Float
+  high   Float
+  low    Float
+  close  Float
+  volume Float?
+
+  share Share @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([shareId, interval, at])
+  @@index([shareId, interval, at])
+  @@index([interval, at])
+}
+
+// --- News -----------------------------------------------------------------
+
+/// One row per article. Split from the mention because Google News returns the
+/// same story for "Reliance Industries" and "ONGC" when it is about crude.
+model NewsArticle {
+  id String @id @default(cuid())
+
+  /// The RSS <guid> when present, else sha1 of the normalised title — with the
+  /// " - Publisher" suffix Google appends stripped, lowercased, punctuation
+  /// collapsed. Without the normalisation the same story dedupes as two.
+  dedupKey String @unique
+
+  title       String
+  url         String
+  source      String?
+  publishedAt DateTime
+
+  /// Distinct from publishedAt, and it is this that drives the live highlight:
+  /// a story published three hours ago that the sweep only just found is new
+  /// *to you*, and should light up.
+  firstSeenAt DateTime @default(now())
+
+  // Classification — a keyword rule, not a model. Deterministic and testable.
+  category     String? /// NewsCategory
+  polarity     String? /// NewsPolarity: POSITIVE | NEGATIVE | NEUTRAL
+  confidence   Float?
+  /// The terms that triggered the classification, kept so every tag on screen
+  /// can answer "why is this tagged that".
+  matchedTerms String?
+
+  mentions ShareNewsMention[]
+
+  @@index([publishedAt])
+  @@index([firstSeenAt])
+}
+
+model ShareNewsMention {
+  id        String @id @default(cuid())
+  shareId   String
+  articleId String
+
+  matchedQuery String?
+
+  share   Share       @relation(fields: [shareId], references: [id], onDelete: Cascade)
+  article NewsArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([shareId, articleId])
+  @@index([articleId])
+  @@index([shareId, createdAt])
+}
+
+// --- Corporate events -----------------------------------------------------
+
+model CorporateEvent {
+  id String @id @default(cuid())
+
+  /// Raw NSE symbol, kept even when no Share row matches — a newly listed
+  /// company then shows up the moment its Share row is created.
+  symbol  String
+  shareId String?
+
+  type   String /// CorporateEventType
+  source String /// CorporateEventSource
+
+  eventDate  String /// IST day key, "YYYY-MM-DD"
+  recordDate String?
+
+  description String
+  /// The upstream row as JSON text, for when a classification looks wrong.
+  raw         String?
+
+  /// sha1(source|symbol|eventDate|description)
+  dedupKey String @unique
+
+  share Share? @relation(fields: [shareId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([eventDate])
+  @@index([shareId, eventDate])
+  @@index([symbol])
+}
+
+// --- Derivatives (F&O) ----------------------------------------------------
+
+/// An underlying with a listed option chain. NIFTY to begin with; the model is
+/// general so BANKNIFTY or a single stock can be added without a migration.
+model OptionUnderlying {
+  id          String @id @default(cuid())
+  symbol      String @unique /// "NIFTY"
+  kind        String /// UnderlyingKind: INDEX | EQUITY
+  displayName String
+  lotSize     Int?
+
+  snapshots OptionChainSnapshot[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// One capture of a full option chain for one expiry, with the derived
+/// analytics computed at capture time so pages never recompute them.
+model OptionChainSnapshot {
+  id           String @id @default(cuid())
+  underlyingId String
+
+  expiryDate String /// IST day key of the expiry
+  capturedAt DateTime
+
+  underlyingValue Float
+
+  totalCeOi     Float
+  totalPeOi     Float
+  totalCeVolume Float
+  totalPeVolume Float
+
+  /// Put-call ratio by open interest and by volume. Above 1 means more puts
+  /// are open than calls, conventionally read as the market leaning bullish
+  /// (put writers expect the level to hold).
+  pcrOi     Float
+  pcrVolume Float
+
+  /// The strike at which option writers collectively lose least — where the
+  /// index would settle if writers had their way. A magnet, not a forecast.
+  maxPainStrike Float
+  atmStrike     Float
+  atmIv         Float?
+
+  /// Strikes with the largest CE / PE open interest — conventionally read as
+  /// resistance and support respectively.
+  oiResistance Float?
+  oiSupport    Float?
+
+  underlying OptionUnderlying @relation(fields: [underlyingId], references: [id], onDelete: Cascade)
+  strikes    OptionStrike[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([underlyingId, expiryDate, capturedAt])
+  @@index([underlyingId, expiryDate, capturedAt])
+  @@index([capturedAt])
+}
+
+model OptionStrike {
+  id          String @id @default(cuid())
+  snapshotId  String
+  strikePrice Float
+
+  ceOi       Float?
+  ceOiChange Float?
+  ceVolume   Float?
+  ceIv       Float?
+  ceLtp      Float?
+  ceChange   Float?
+
+  peOi       Float?
+  peOiChange Float?
+  peVolume   Float?
+  peIv       Float?
+  peLtp      Float?
+  peChange   Float?
+
+  /// OiBuildup for each side, derived from price change against OI change:
+  /// LONG_BUILDUP | SHORT_BUILDUP | SHORT_COVERING | LONG_UNWINDING | FLAT
+  ceBuildup String?
+  peBuildup String?
+
+  snapshot OptionChainSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId, strikePrice])
+  @@index([snapshotId, strikePrice])
+}
+
+// --- Watchlist ------------------------------------------------------------
+
+model WatchlistItem {
+  id      String @id @default(cuid())
+  /// Single user, so one global watchlist — hence unique rather than a
+  /// (userId, shareId) pair.
+  shareId String @unique
+
+  note      String?
+  sortIndex Int     @default(0)
+
+  /// Price at the moment of adding. The movement column measures from this,
+  /// which is what "observe it" means — return since you noticed it, not
+  /// return since a previous close you never chose.
+  addedPrice Float?
+
+  share Share @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  addedAt   DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortIndex])
+}
+
+// --- Refresh bookkeeping --------------------------------------------------
+
+/// One row per upstream. The single reason the UI can say "this number is 40
+/// minutes old" instead of silently showing yesterday.
+model SourceFetch {
+  id     String @id @default(cuid())
+  source String @unique /// SourceKey
+
+  lastAttemptAt DateTime?
+  lastSuccessAt DateTime?
+  lastStatus    String? /// FetchStatus: OK | FAILED | SKIPPED
+  lastError     String?
+  itemCount     Int?
+  durationMs    Int?
+
+  consecutiveFailures Int @default(0)
+
+  /// Honoured by both the poller and the manual Refresh button, so a wedged
+  /// upstream is not hammered by someone clicking repeatedly.
+  nextEligibleAt DateTime?
+
+  updatedAt DateTime @updatedAt
+}
+
+model MarketSnapshot {
+  id        String @id @default(cuid())
+  tradeDate String @unique /// IST day key
+
+  status             String /// "Open" | "Closed"
+  niftyLevel         Float?
+  niftyChangePercent Float?
+
+  capturedAt DateTime @default(now())
+}
