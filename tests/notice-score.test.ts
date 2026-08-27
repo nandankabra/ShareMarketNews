@@ -51,6 +51,28 @@ describe("dated events", () => {
     expect(result.score).toBeLessThan(100);
   });
 
+  it("keeps non-event reasons when an event also scores", () => {
+    // Regression: the event block used to truncate the reasons array to the
+    // count of non-event entries, which only removed the right ones because
+    // events happened to be scored first. Reordering the rules would have
+    // silently dropped real reasons off the end.
+    const result = score({
+      events: [{ type: "EARNINGS", eventDate: TODAY, description: "" }],
+      newsCount24h: 2,
+      volume: 3_000_000,
+      avgVolume20d: 1_000_000,
+      inWatchlist: true,
+    });
+
+    const codes = result.reasons.map((reason) => reason.code);
+    expect(codes).toContain("EVENT_TODAY");
+    expect(codes).toContain("NEWS_24H");
+    expect(codes).toContain("VOLUME_SPIKE");
+    expect(codes).toContain("IN_WATCHLIST");
+    // Exactly one event reason survives, whichever order the rules run in.
+    expect(codes.filter((code) => code.startsWith("EVENT_"))).toHaveLength(2); // EVENT_TODAY + EVENT_KIND
+  });
+
   it("adds an ex-date on its own account", () => {
     const withEx = score({ events: [{ type: "DIVIDEND", eventDate: TODAY, description: "" }] });
     expect(withEx.reasons.some((reason) => reason.code === "EX_DATE_NEAR")).toBe(true);

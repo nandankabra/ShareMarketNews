@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { atr } from "@/lib/ta/atr";
+import { bollinger } from "@/lib/ta/bollinger";
+import { lastCrossover, minOverWindow } from "@/lib/ta/crossover";
 import { computeLevels } from "@/lib/ta/levels";
 import { macd } from "@/lib/ta/macd";
 import { last, sma } from "@/lib/ta/moving-average";
@@ -40,10 +42,21 @@ export async function recomputeIndicators(shareId: string): Promise<boolean> {
 
   const rsiSeries = rsi(closes, 14);
   const atrSeries = atr(candles, 14);
-  const sma20 = last(sma(closes, 20));
-  const sma50 = last(sma(closes, 50));
-  const sma200 = last(sma(closes, 200));
+  const sma20Series = sma(closes, 20);
+  const sma50Series = sma(closes, 50);
+  const sma200Series = sma(closes, 200);
+  const sma20 = last(sma20Series);
+  const sma50 = last(sma50Series);
+  const sma200 = last(sma200Series);
   const macdResult = macd(closes);
+
+  // Needs both averages to have filled, so it only exists past ~200 sessions.
+  const crossover = lastCrossover(sma50Series, sma200Series);
+
+  const bands = bollinger(closes, 20, 2);
+  const bandwidthNow = last(bands.bandwidth);
+  // Roughly six months of sessions.
+  const bandwidthFloor = minOverWindow(bands.bandwidth, 126);
 
   const close = closes.at(-1) ?? null;
   const atrValue = last(atrSeries);
@@ -78,6 +91,10 @@ export async function recomputeIndicators(shareId: string): Promise<boolean> {
       sma200,
       macdHist: last(macdResult.histogram),
       trendState: trendStateFrom(close, sma200),
+      crossDirection: crossover?.direction ?? null,
+      crossAt: crossover ? new Date(candles[crossover.index].t) : null,
+      bandwidth: bandwidthNow,
+      bandwidthMin6m: bandwidthFloor,
       taAt: new Date(),
       levelsJson: JSON.stringify(levels),
       levelsAt: new Date(),

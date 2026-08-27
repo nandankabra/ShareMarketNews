@@ -26,7 +26,7 @@ export async function refreshDailyBars(
 
   return runTask(
     "YAHOO_DAILY_BARS",
-    async () => {
+    async (context) => {
       // Oldest snapshot first, so every share gets a turn.
       const shares = await prisma.share.findMany({
         where: { quoteUnavailable: false },
@@ -40,7 +40,7 @@ export async function refreshDailyBars(
       let blocked = false;
 
       for (const share of shares) {
-        if (blocked) break;
+        if (blocked || context.expired()) break;
 
         try {
           const quote = await fetchChart(share.yahooSymbol, args.range ?? "1y", "1d");

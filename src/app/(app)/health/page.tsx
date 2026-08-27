@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { PageHeader, PageShell } from "@/components/layout/page-header";
+import { RefreshButton } from "@/components/market/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -91,7 +92,8 @@ export default async function HealthPage() {
               <TableHead className="text-right">Took</TableHead>
               <TableHead className="text-right">Fails</TableHead>
               <TableHead>Next try</TableHead>
-              <TableHead className="min-w-[220px]">Last error</TableHead>
+              <TableHead className="min-w-[200px]">Last error</TableHead>
+              <TableHead aria-label="Refresh" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -130,8 +132,11 @@ export default async function HealthPage() {
                     ? `in ${Math.ceil((source.nextEligibleAt.getTime() - now) / 60_000)}m`
                     : "now"}
                 </TableCell>
-                <TableCell className="text-muted-foreground max-w-[320px] truncate text-xs">
+                <TableCell className="text-muted-foreground max-w-[300px] truncate text-xs">
                   {source.lastError ?? "—"}
+                </TableCell>
+                <TableCell>
+                  <RefreshButton source={source.source} label={source.label} />
                 </TableCell>
               </TableRow>
             ))}

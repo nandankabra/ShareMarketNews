@@ -1,0 +1,98 @@
+# Architecture
+
+## Politeness and provenance
+
+This reads unofficial, unauthenticated endpoints for a personal,
+non-commercial tool. Every source and its status:
+
+| Source | Endpoint | Status |
+|---|---|---|
+| NSE market status | `api/marketStatus` | Unofficial, cookie-gated |
+| NSE event calendar | `api/event-calendar` | Unofficial, cookie-gated |
+| NSE corporate actions | `api/corporates-corporateActions` | Unofficial, cookie-gated |
+| NSE index levels | `api/allIndices` | Unofficial, cookie-gated |
+| NSE option chain | `api/option-chain-v3` | Unofficial, cookie-gated, needs an explicit expiry |
+| Nifty constituents | `niftyindices.com/IndexConstituent/*.csv` | Public files |
+| Quotes & bars | Yahoo `v8/finance/chart` | Unofficial, rate-limited by IP |
+| Share search | Yahoo `v1/finance/search` | Unofficial |
+| News | Google News RSS | Public feed, non-commercial use only |
+
+Dead ends, recorded so nobody re-derives them: `api/option-chain-indices` and
+`api/equity-stockIndices` now 404; Yahoo `quoteSummary` returns 401 without a
+crumb; NSE `api/quote-equity` is a hard 403; NSE historical endpoints return
+503; stooq gates behind a JavaScript proof-of-work challenge.
+
+See `docs/HOSTING.md` for the rate-limit rules. They are not advisory.
+
+## The governing fact
+
+**Every one of these upstreams returns HTTP 200 when it fails.**
+
+- A wrong constituents filename returns a full HTML web page.
+- An expired NSE cookie returns a login page.
+- An unknown Yahoo symbol returns `{chart:{result:null}}`.
+- Google News pads a thin feed with entirely unrelated stories.
+
+So status codes are close to worthless, and every response is validated by
+*shape* before it is believed. That single fact explains most of the structure
+below.
+
+## Shape
+
+```
+providers/          fetch + a sibling pure parser, per upstream
+  http.ts           politeFetch: one UA, hard deadline, retry policy
+  rate-limit.ts     per-host serialized queue with floors
+  circuit.ts        a 429 stops calls to that host entirely
+refresh/
+  tasks/*.ts        plain async functions over prisma + providers
+  run-task.ts       the only writer of SourceFetch; backoff and timeouts
+  schedule.ts       pure: dueTasks(now, marketOpen, rows)
+ta/                 pure indicators over Candle[]
+news/               pure classification, relevance, historical reaction
+notice/score.ts     pure: the today/tomorrow rule
+options/analytics   pure: PCR, max pain, OI buildup
+services/           server-only read models for the pages
+poller/main.ts      the loop; runs the same tasks the UI's actions do
+```
+
+Every file that touches the network only builds a URL, calls `politeFetch`, and
+hands the response text to a pure parser. That split is why every parser is
+tested against a real captured payload with no mocking at all.
+
+## Decisions worth knowing
+
+**The poller and the app run the same code.** Tasks are plain functions; the
+poller schedules them and the UI can call them directly. That symmetry is what
+makes "the poller is not running" a degraded mode rather than a broken app.
+
+**Nothing fetches during render.** Pages read the database and say how old it
+is. This is also what makes the free hosting split possible.
+
+**Indicators are computed once, after the close.** A sector table of seventy
+rows would otherwise re-derive seventy 250-bar series per page view.
+
+**Calendar dates are IST day-key strings, not timestamps.** A UTC server flips
+"today" at 18:30 IST — three hours after the market closes — which would
+silently drop that evening's briefing.
+
+**SQLite has no enums, no JSON and no date type.** Those become String columns
+with TypeScript unions in `src/lib/db/enums.ts`. Volume is a Float rather than
+BigInt, because doubles are exact past 2^53 and BigInt does not survive the RSC
+boundary.
+
+**The score is never shown.** It orders the briefing; the reasons are what the
+reader gets. A number cannot be argued with.
+
+## The line this app does not cross
+
+It describes; it does not advise.
+
+The option-chain page reports open interest, PCR, max pain and buildup — all
+descriptions of positions already open — and says on screen that none of it is a
+recommendation. The news reaction panel reports what a share has historically
+done on its own heaviest-news days, refuses to quote a range from fewer than
+three of them, and carries "Past reaction, not a forecast" wherever it appears.
+
+There is no code path anywhere that emits a buy or sell instruction, and there
+should not be one.

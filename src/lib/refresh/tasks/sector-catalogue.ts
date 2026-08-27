@@ -19,7 +19,7 @@ export async function refreshSectorConstituents(
 ): Promise<RunOutcome> {
   return runTask(
     "NIFTY_CONSTITUENTS",
-    async () => {
+    async (context) => {
       const sectors = await prisma.sector.findMany({
         where: { constituentsFile: { not: null } },
         orderBy: { sortIndex: "asc" },
@@ -29,6 +29,8 @@ export async function refreshSectorConstituents(
       const failed: string[] = [];
 
       for (const sector of sectors) {
+        if (context.expired()) break;
+
         try {
           const constituents = await fetchConstituents(sector.constituentsFile!);
 

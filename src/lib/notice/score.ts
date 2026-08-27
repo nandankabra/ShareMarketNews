@@ -77,8 +77,10 @@ export function scoreNotice(input: NoticeInput, today: string, tomorrow: string,
   };
 
   // --- Dated corporate events ------------------------------------------
-  let bestEventPoints = 0;
-  let bestEvent: NoticeEvent | null = null;
+  // Only the nearest event scores: three board meetings this week is one reason
+  // to look, not three. Chosen before anything is added to `reasons`, so this
+  // block never has to reach back in and remove an entry it already wrote.
+  let best: { points: number; code: NoticeReasonCode; label: string; event: NoticeEvent } | null = null;
 
   for (const event of input.events) {
     let points = 0;
@@ -99,15 +101,12 @@ export function scoreNotice(input: NoticeInput, today: string, tomorrow: string,
       label = `${describeType(event.type)} in two days`;
     }
 
-    if (points > bestEventPoints) {
-      bestEventPoints = points;
-      bestEvent = event;
-      // Only the nearest event scores. Three board meetings this week is one
-      // reason to look, not three.
-      reasons.length = reasons.filter((reason) => !reason.code.startsWith("EVENT_")).length;
-      add(code, label, points);
-    }
+    if (points > (best?.points ?? 0)) best = { points, code, label, event };
   }
+
+  const bestEvent = best?.event ?? null;
+  const bestEventPoints = best?.points ?? 0;
+  if (best) add(best.code, best.label, best.points);
 
   if (bestEvent && bestEventPoints > 0) {
     eventDriven = true;

@@ -82,14 +82,15 @@ export async function selectQuoteTargets(tiers: QuoteTier[], budget: number): Pr
 }
 
 export async function refreshQuotes(
-  args: { tiers?: QuoteTier[]; budget?: number; ignoreBackoff?: boolean } = {},
+  args: { tiers?: QuoteTier[]; budget?: number; marketOpen?: boolean; ignoreBackoff?: boolean } = {},
 ): Promise<RunOutcome> {
   const budget = args.budget ?? env.QUOTE_BUDGET_PER_TICK;
   const tiers = args.tiers ?? ["A", "B", "C"];
+  const marketOpen = args.marketOpen ?? false;
 
   return runTask(
     "YAHOO_QUOTES",
-    async () => {
+    async (context) => {
       const ids = await selectQuoteTargets(tiers, budget);
       if (ids.length === 0) return { itemCount: 0, note: "nothing due" };
 
@@ -102,7 +103,7 @@ export async function refreshQuotes(
       let blocked = false;
 
       for (const share of shares) {
-        if (blocked) break;
+        if (blocked || context.expired()) break;
 
         try {
           const quote = await fetchChart(share.yahooSymbol, "5d", "1d");
@@ -131,9 +132,12 @@ export async function refreshQuotes(
             },
           });
 
-          // One intraday row per successful poll during the session — the
-          // substrate for sparklines without asking Yahoo for minute bars.
-          if (quote.lastPrice != null) {
+          // One intraday row per successful poll, but only while the session is
+          // actually running. Polling continues after the close for watchlist
+          // shares, and without this guard every one of those writes another
+          // copy of the same closing price — filling the table with rows that
+          // describe nothing and drawing a flat overnight tail on every chart.
+          if (marketOpen && quote.lastPrice != null) {
             const at = new Date(Math.floor(Date.now() / 60_000) * 60_000);
             await prisma.priceSnapshot.upsert({
               where: { shareId_interval_at: { shareId: share.id, interval: "INTRADAY", at } },

@@ -16,3 +16,4 @@ prisma/*.db-wal
 prisma/*.db-shm
 .shots/
 prisma/demo.db*
+prisma/smoke.db*

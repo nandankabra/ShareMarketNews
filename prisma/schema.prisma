@@ -100,6 +100,19 @@ model Share {
   trendState String? /// TrendState: ABOVE_200 | BELOW_200 | UNKNOWN
   taAt       DateTime?
 
+  /// The most recent 50/200 crossover. GOLDEN when the 50-day crossed above,
+  /// DEATH when below. Stored rather than derived per request: finding it means
+  /// walking two full moving-average series, which is not work a page render
+  /// should repeat for every row in a table.
+  crossDirection String?
+  crossAt        DateTime?
+
+  /// Bollinger bandwidth now, and the lowest it has been over six months. A
+  /// squeeze is only meaningful against its own recent history — an absolute
+  /// bandwidth says nothing without the baseline to compare it to.
+  bandwidth      Float?
+  bandwidthMin6m Float?
+
   /// Support/resistance zones as JSON text (SQLite has no JSON type). Computed
   /// daily, not per request: clustering 250 bars of pivots on every page load
   /// would be the most expensive thing the app does.

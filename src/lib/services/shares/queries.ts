@@ -118,7 +118,10 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
   ]);
 
   const levels = parseLevels(share.levelsJson);
-  const bandwidth = null; // Bollinger squeeze needs a 6-month baseline; P5.
+
+  // Age in whole sessions is what a reader wants — "six days ago", not a date.
+  const crossAgeDays =
+    share.crossAt != null ? Math.floor((Date.now() - share.crossAt.getTime()) / 86_400_000) : null;
 
   const signals = buildSignals({
     close: share.lastPrice,
@@ -132,10 +135,10 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     avgVolume20d: share.avgVolume20d,
     week52High: share.week52High,
     week52Low: share.week52Low,
-    bandwidth,
-    bandwidthMin6m: null,
-    crossAgeDays: null,
-    crossDirection: null,
+    bandwidth: share.bandwidth,
+    bandwidthMin6m: share.bandwidthMin6m,
+    crossAgeDays,
+    crossDirection: (share.crossDirection as "GOLDEN" | "DEATH" | null) ?? null,
     nearestSupport: nearest(levels?.supports, share.lastPrice, "SUPPORT"),
     nearestResistance: nearest(levels?.resistances, share.lastPrice, "RESISTANCE"),
   });

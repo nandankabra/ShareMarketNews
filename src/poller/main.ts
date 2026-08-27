@@ -85,7 +85,7 @@ async function runTaskByName(name: TaskName, marketOpen: boolean): Promise<void>
     case "quotes":
       // While the market is shut only the watchlist and event-dated shares are
       // worth re-asking about; the other four hundred have not moved.
-      return report(name, await refreshQuotes({ tiers: marketOpen ? ["A", "B", "C"] : ["A"] }));
+      return report(name, await refreshQuotes({ tiers: marketOpen ? ["A", "B", "C"] : ["A"], marketOpen }));
     case "news":
       return report(name, await refreshNewsSweep());
     case "dailyBars":

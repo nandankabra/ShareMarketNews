@@ -23,7 +23,7 @@ export async function refreshNewsForShares(
 ): Promise<RunOutcome> {
   return runTask(
     "GOOGLE_NEWS",
-    async () => {
+    async (context) => {
       const shares = await prisma.share.findMany({
         where: { id: { in: shareIds } },
         select: { id: true, symbol: true, name: true },
@@ -35,6 +35,8 @@ export async function refreshNewsForShares(
       let dropped = 0;
 
       for (const share of shares) {
+        if (context.expired()) break;
+
         try {
           const items = await fetchNews(share.name, window);
 

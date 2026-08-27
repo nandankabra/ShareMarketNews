@@ -13,6 +13,18 @@ import { prisma } from "@/lib/prisma";
 
 export type TaskResult = { itemCount: number; note?: string };
 
+/**
+ * Handed to every task so its loops can notice they have run out of time.
+ *
+ * Rejecting on a timeout does not stop the work behind it — an async function
+ * cannot be cancelled from outside. A single request is already bounded by
+ * politeFetch's own deadline, but a task that loops over twenty-five shares can
+ * keep going for another twelve minutes after the timeout has fired, queuing
+ * requests that later ticks then wait behind. Checking `expired()` between
+ * items is what actually stops it.
+ */
+export type TaskContext = { expired: () => boolean };
+
 export type RunOutcome =
   | { status: "OK"; itemCount: number; durationMs: number; note?: string }
   | { status: "SKIPPED"; reason: string }
@@ -58,7 +70,7 @@ function withTimeout<T>(source: SourceKey, promise: Promise<T>, ms: number): Pro
 
 export async function runTask(
   source: SourceKey,
-  run: () => Promise<TaskResult>,
+  run: (context: TaskContext) => Promise<TaskResult>,
   options: { ignoreBackoff?: boolean; timeoutMs?: number } = {},
 ): Promise<RunOutcome> {
   const existing = await prisma.sourceFetch.findUnique({ where: { source } });
@@ -77,8 +89,12 @@ export async function runTask(
     create: { source, lastAttemptAt: new Date() },
   });
 
+  const timeoutMs = options.timeoutMs ?? TASK_TIMEOUT_MS;
+  const deadline = started + timeoutMs;
+  const context: TaskContext = { expired: () => Date.now() >= deadline };
+
   try {
-    const result = await withTimeout(source, run(), options.timeoutMs ?? TASK_TIMEOUT_MS);
+    const result = await withTimeout(source, run(context), timeoutMs);
     const durationMs = Date.now() - started;
 
     await prisma.sourceFetch.update({

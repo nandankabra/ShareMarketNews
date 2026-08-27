@@ -1,5 +1,5 @@
 import { env } from "@/env";
-import { istToday, parseNseDate } from "@/lib/date/ist";
+import { parseNseDate } from "@/lib/date/ist";
 import { analyseChain } from "@/lib/options/analytics";
 import { prisma } from "@/lib/prisma";
 import { ProviderError } from "@/lib/providers/errors";
@@ -23,7 +23,7 @@ export async function refreshOptionChains(
 ): Promise<RunOutcome> {
   return runTask(
     "NSE_OPTION_CHAIN",
-    async () => {
+    async (context) => {
       const underlyings = await prisma.optionUnderlying.findMany({
         where: { symbol: { in: env.OPTION_UNDERLYINGS } },
       });
@@ -32,10 +32,14 @@ export async function refreshOptionChains(
       const notes: string[] = [];
 
       for (const underlying of underlyings) {
+        if (context.expired()) break;
+
         const expiryLabels = await fetchOptionExpiries(underlying.symbol);
         const wanted = expiryLabels.slice(0, env.OPTION_EXPIRY_DEPTH);
 
         for (const label of wanted) {
+          if (context.expired()) break;
+
           const dayKey = parseNseDate(label);
           if (!dayKey) continue;
 
@@ -117,19 +121,4 @@ export async function pruneOptionChains(): Promise<number> {
     where: { capturedAt: { lt: cutoff } },
   });
   return result.count;
-}
-
-/** The newest chain for an underlying, with its strikes. */
-export async function latestChain(symbol: string, expiryDate?: string) {
-  const underlying = await prisma.optionUnderlying.findUnique({ where: { symbol } });
-  if (!underlying) return null;
-
-  return prisma.optionChainSnapshot.findFirst({
-    where: {
-      underlyingId: underlying.id,
-      ...(expiryDate ? { expiryDate } : { expiryDate: { gte: istToday() } }),
-    },
-    orderBy: [{ expiryDate: "asc" }, { capturedAt: "desc" }],
-    include: { strikes: { orderBy: { strikePrice: "asc" } }, underlying: true },
-  });
 }
