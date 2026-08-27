@@ -1,5 +1,6 @@
 import { env } from "@/env";
 import { classifyHeadline } from "@/lib/news/classify";
+import { isRelevantHeadline } from "@/lib/news/relevance";
 import { prisma } from "@/lib/prisma";
 import { fetchNews } from "@/lib/providers/googlenews";
 import type { NewsWindow } from "@/lib/providers/googlenews";
@@ -31,12 +32,21 @@ export async function refreshNewsForShares(
       let articles = 0;
       let mentions = 0;
       let failures = 0;
+      let dropped = 0;
 
       for (const share of shares) {
         try {
           const items = await fetchNews(share.name, window);
 
           for (const item of items) {
+            // Google pads a thin feed with unrelated stories rather than
+            // returning fewer. Filtering here keeps the news counts the notice
+            // rule scores on from being inflated by weather bulletins.
+            if (!isRelevantHeadline(item.title, share.name, share.symbol)) {
+              dropped++;
+              continue;
+            }
+
             const classification = classifyHeadline(item.title);
 
             const article = await prisma.newsArticle.upsert({
@@ -88,7 +98,9 @@ export async function refreshNewsForShares(
 
       return {
         itemCount: mentions,
-        note: `${articles} articles across ${shares.length - failures} share(s)`,
+        note:
+          `${articles} articles across ${shares.length - failures} share(s)` +
+          (dropped > 0 ? ` · ${dropped} off-topic dropped` : ""),
       };
     },
     options,
