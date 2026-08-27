@@ -39,7 +39,8 @@ the poller is expected to be off much of the time. `/health` names the cause.
 
 | Symptom | Meaning |
 |---|---|
-| Prices all show `—` | Yahoo is rate limiting, or the poller has not run. Check `/health` for a `BLOCKED` row and its next-retry time. |
+| Prices all show `—` | Both quote sources are down, or the poller has never run. Check `/health`. |
+| Prices carry a small `BSE` mark | Yahoo is rate limiting and prices are coming from BSE instead. Real prices, different exchange — the two do not print identical numbers. Nothing to fix; it reverts on its own. |
 | "0 bars" on a share page | The post-close snapshot has not run for that share yet. It happens at 16:15 IST, sliced 25 shares per tick. |
 | "indicators need about thirty sessions" | Fewer than 30 daily bars stored. Same cause. |
 | A sector shows no constituents | Its index file failed. `/health` will show `NIFTY_CONSTITUENTS` with the failing filename. Constituents are never wiped by a failed sync — they need seven days of absence to be pruned. |
@@ -48,7 +49,11 @@ the poller is expected to be off much of the time. `/health` names the cause.
 ## Rate limits are real
 
 Yahoo will rate-limit an IP that asks too often, and it stays limited for hours.
-The app handles this — a 429 opens a per-host circuit that stops calls for five
-minutes, and prices simply grey out — but during development it is easy to
-trigger by re-running the smoke test repeatedly. If `/health` shows
-`YAHOO_QUOTES` as `BLOCKED`, the fix is to wait.
+During development it is easy to trigger by re-running the smoke test
+repeatedly.
+
+The app handles it: a 429 opens a per-host circuit, and quotes fall back to BSE
+so the panel keeps real prices. Daily bars have no fallback, so charts stop
+gaining new candles until Yahoo answers again. If `/health` shows
+`YAHOO_QUOTES` as `BLOCKED`, the fix is to wait — everything except history
+carries on working.

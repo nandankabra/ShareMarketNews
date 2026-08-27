@@ -14,13 +14,22 @@ non-commercial tool. Every source and its status:
 | NSE option chain | `api/option-chain-v3` | Unofficial, cookie-gated, needs an explicit expiry |
 | Nifty constituents | `niftyindices.com/IndexConstituent/*.csv` | Public files |
 | Quotes & bars | Yahoo `v8/finance/chart` | Unofficial, rate-limited by IP |
+| Fallback quotes | BSE `getScripHeaderData` | Unofficial; used only when Yahoo is throttled |
+| Fallback 52-week | BSE `HighLow` | Unofficial; fetched once per share |
+| BSE scrip codes | BSE `ListofScripData` | Unofficial; one request covers all listed equities |
 | Share search | Yahoo `v1/finance/search` | Unofficial |
 | News | Google News RSS | Public feed, non-commercial use only |
 
 Dead ends, recorded so nobody re-derives them: `api/option-chain-indices` and
 `api/equity-stockIndices` now 404; Yahoo `quoteSummary` returns 401 without a
 crumb; NSE `api/quote-equity` is a hard 403; NSE historical endpoints return
-503; stooq gates behind a JavaScript proof-of-work challenge.
+503; stooq gates behind a JavaScript proof-of-work challenge; BSE
+`StockReachGraph` returns only the current session whatever `flag` is passed,
+and `StockPriceCSVDownload` returns an empty body.
+
+**Daily bars therefore come from Yahoo alone.** Prices have a fallback; history
+does not. When Yahoo is throttling, charts render from whatever bars are already
+stored and the share page says so.
 
 See `docs/HOSTING.md` for the rate-limit rules. They are not advisory.
 
@@ -61,6 +70,16 @@ hands the response text to a pure parser. That split is why every parser is
 tested against a real captured payload with no mocking at all.
 
 ## Decisions worth knowing
+
+**Prices have two sources; history has one.** Yahoo rate-limits by IP for hours
+at a time, which used to take every price in the app down with it. BSE lists the
+same companies on separate infrastructure, joined on ISIN — the exchanges
+disagree on names and tickers, an ISIN does not. Yahoo stays preferred because
+it also carries volume, which BSE's quote endpoint does not expose at all.
+
+The two exchanges do not print the same price, so each quote records where it
+came from and BSE-sourced prices are labelled on screen. Passing one off as the
+other would be a small, quiet lie.
 
 **The poller and the app run the same code.** Tasks are plain functions; the
 poller schedules them and the UI can call them directly. That symmetry is what

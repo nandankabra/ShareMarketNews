@@ -3,7 +3,7 @@ import { istDayKey } from "@/lib/date/ist";
 import { prisma } from "@/lib/prisma";
 import { ProviderError } from "@/lib/providers/errors";
 import { isCircuitOpen } from "@/lib/providers/circuit";
-import { fetchBseQuote } from "@/lib/providers/bse";
+import { fetchBseHighLow, fetchBseQuote } from "@/lib/providers/bse";
 import { fetchChart } from "@/lib/providers/yahoo";
 
 import { runTask, type RunOutcome } from "../run-task";
@@ -100,6 +100,7 @@ export async function refreshQuotes(
         where: { id: { in: ids } },
         select: {
           id: true, symbol: true, yahooSymbol: true, notFoundCount: true, bseScripCode: true,
+          week52High: true,
         },
       });
 
@@ -234,16 +235,32 @@ export async function refreshQuotes(
  * A fallback price from BSE. Returns false when the share has no scrip code or
  * BSE has nothing for it, which is a normal outcome rather than an error.
  */
-async function quoteViaBse(share: { id: string; bseScripCode: string | null }): Promise<boolean> {
+async function quoteViaBse(share: {
+  id: string;
+  bseScripCode: string | null;
+  week52High?: number | null;
+}): Promise<boolean> {
   if (!share.bseScripCode) return false;
 
   try {
     const quote = await fetchBseQuote(share.bseScripCode);
     if (quote.lastPrice == null) return false;
 
+    // A second request, so only for shares that have no range yet. It barely
+    // moves, and re-asking every poll would be waste dressed as freshness.
+    let range: { week52High: number | null; week52Low: number | null } | null = null;
+    if (share.week52High == null) {
+      try {
+        range = await fetchBseHighLow(share.bseScripCode);
+      } catch {
+        // A missing range is not a reason to drop a good price.
+      }
+    }
+
     await prisma.share.update({
       where: { id: share.id },
       data: {
+        ...(range?.week52High != null ? { week52High: range.week52High, week52Low: range.week52Low } : {}),
         lastPrice: quote.lastPrice,
         previousClose: quote.previousClose,
         dayChange: quote.change,

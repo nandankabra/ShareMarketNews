@@ -1,6 +1,6 @@
 import { politeFetch } from "../http";
 
-import { parseBseQuote, type BseQuote } from "./parse-quote";
+import { parseBseHighLow, parseBseQuote, type BseHighLow, type BseQuote } from "./parse-quote";
 import { parseScripMaster, type ScripEntry } from "./parse-scrip-master";
 
 /**
@@ -35,4 +35,17 @@ export async function fetchBseQuote(scripCode: string): Promise<BseQuote> {
   return parseBseQuote(response.text, scripCode);
 }
 
-export type { BseQuote, ScripEntry };
+/**
+ * The 52-week range. A second request, so it is fetched only for shares that do
+ * not have one yet rather than on every poll — the range moves slowly enough
+ * that re-asking hourly would be waste dressed up as freshness.
+ */
+export async function fetchBseHighLow(scripCode: string): Promise<BseHighLow> {
+  const response = await politeFetch(
+    `https://api.bseindia.com/BseIndiaAPI/api/HighLow/w?Type=EQ&flag=C&scripcode=${encodeURIComponent(scripCode)}`,
+    { source: "BSE_QUOTES", referer: REFERER, accept: "application/json" },
+  );
+  return parseBseHighLow(response.text);
+}
+
+export type { BseHighLow, BseQuote, ScripEntry };

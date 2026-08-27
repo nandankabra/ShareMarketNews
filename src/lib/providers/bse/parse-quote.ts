@@ -71,3 +71,34 @@ export function parseBseQuote(body: string, scripCode: string): BseQuote {
     changePercent: parsed.data.CurrRate?.PcChg ?? null,
   };
 }
+
+const highLowSchema = z.object({
+  Fifty2WkHigh_adj: numeric,
+  Fifty2WkLow_adj: numeric,
+});
+
+export type BseHighLow = { week52High: number | null; week52Low: number | null };
+
+/**
+ * BSE's 52-week range, from a separate endpoint to the quote.
+ *
+ * The adjusted figures, not the raw ones: adjusted values account for splits
+ * and bonuses, so a share that split during the year does not appear to have
+ * halved. The unadjusted fields arrive with the date glued onto the number
+ * ("3336.70 (03/02/2026)") and would need unpicking anyway.
+ */
+export function parseBseHighLow(body: string): BseHighLow {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    throw new ProviderError({ kind: "SHAPE", source: "BSE_QUOTES", message: "high/low was not JSON" });
+  }
+
+  const parsed = highLowSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new ProviderError({ kind: "SHAPE", source: "BSE_QUOTES", message: "high/low shape changed" });
+  }
+
+  return { week52High: parsed.data.Fifty2WkHigh_adj, week52Low: parsed.data.Fifty2WkLow_adj };
+}
