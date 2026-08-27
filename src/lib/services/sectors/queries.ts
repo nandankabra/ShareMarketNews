@@ -71,6 +71,7 @@ export type ConstituentRow = {
   dayHigh: number | null;
   volume: number | null;
   quotedAt: Date | null;
+  quoteSource: string | null;
   rsi14: number | null;
   newsCount: number;
   nextEvent: { eventDate: string; type: string } | null;
@@ -130,6 +131,7 @@ export async function getSectorDetail(key: string) {
         dayHigh: share.dayHigh,
         volume: share.volume,
         quotedAt: share.quotedAt,
+        quoteSource: share.quoteSource,
         rsi14: share.rsi14,
         newsCount: newsByShare.get(share.id) ?? 0,
         nextEvent: eventByShare.get(share.id) ?? null,

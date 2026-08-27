@@ -99,6 +99,7 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
               ) : null}
               <span className="text-muted-foreground font-mono text-[10px]">
                 {share.quotedAt ? relativeTime(share.quotedAt, new Date(now)) : "no quote yet"}
+                {share.quoteSource === "BSE" ? " · BSE price" : ""}
               </span>
             </div>
           </div>

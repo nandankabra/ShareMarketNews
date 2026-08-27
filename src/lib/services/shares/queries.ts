@@ -26,6 +26,7 @@ export type ShareDetail = {
   week52Low: number | null;
   volume: number | null;
   quotedAt: Date | null;
+  quoteSource: string | null;
   rsi14: number | null;
   atr14: number | null;
   atrPercent: number | null;
@@ -160,6 +161,7 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     week52Low: share.week52Low,
     volume: share.volume,
     quotedAt: share.quotedAt,
+    quoteSource: share.quoteSource,
     rsi14: share.rsi14,
     atr14: share.atr14,
     atrPercent: share.atrPercent,

@@ -26,6 +26,7 @@ const LABELS: Record<string, string> = {
   NIFTY_CONSTITUENTS: "Sector constituents",
   YAHOO_QUOTES: "Share prices",
   YAHOO_DAILY_BARS: "Daily bars & indicators",
+  BSE_QUOTES: "Fallback prices (BSE)",
   YAHOO_SEARCH: "Share search",
   GOOGLE_NEWS: "News headlines",
 };

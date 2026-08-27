@@ -64,7 +64,7 @@ export function ConstituentsTable({ rows, now }: { rows: ConstituentRow[]; now: 
               {row.name}
             </TableCell>
             <TableCell className="text-right">
-              <PriceCell value={row.lastPrice} quotedAt={row.quotedAt} now={now} />
+              <PriceCell value={row.lastPrice} quotedAt={row.quotedAt} now={now} source={row.quoteSource} />
             </TableCell>
             <TableCell className="text-right">
               {row.dayChangePercent != null ? (

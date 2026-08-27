@@ -63,6 +63,16 @@ model Share {
   yahooSector   String?
   yahooIndustry String?
 
+  /// BSE scrip code, resolved by ISIN rather than by name or ticker — the two
+  /// exchanges disagree on both, while an ISIN identifies a security globally.
+  /// Used only to fetch a fallback price when Yahoo is rate limiting.
+  bseScripCode String?
+
+  /// Which exchange the current price came from: NSE (via Yahoo) or BSE. The
+  /// two do not print identical prices, so a BSE quote is labelled on screen
+  /// rather than passed off as an NSE one.
+  quoteSource String?
+
   // Latest quote, denormalized onto the row rather than kept in a LatestQuote
   // table. It is 1:1 and never optional in practice, and every screen that
   // lists shares (sector grid, watchlist, briefing) would otherwise pay a join

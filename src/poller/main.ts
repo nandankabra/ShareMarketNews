@@ -6,6 +6,7 @@ import { ensurePragmas, prisma } from "@/lib/prisma";
 import { openCircuits } from "@/lib/providers/circuit";
 import { dueTasks, type FetchRow, type TaskName } from "@/lib/refresh/schedule";
 import type { RunOutcome } from "@/lib/refresh/run-task";
+import { refreshBseCodes } from "@/lib/refresh/tasks/bse-codes";
 import { refreshCorporateEvents } from "@/lib/refresh/tasks/corporate-events";
 import { pruneIntraday, refreshDailyBars } from "@/lib/refresh/tasks/daily-snapshot";
 import { refreshMarketStatus } from "@/lib/refresh/tasks/market-status";
@@ -74,6 +75,8 @@ async function runTaskByName(name: TaskName, marketOpen: boolean): Promise<void>
       return report(name, await refreshSectorLevels());
     case "sectorConstituents":
       return report(name, await refreshSectorConstituents());
+    case "bseCodes":
+      return report(name, await refreshBseCodes());
     case "corporateEvents": {
       const outcome = await refreshCorporateEvents();
       report("corporateEvents", outcome.calendar);

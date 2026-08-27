@@ -14,6 +14,7 @@ export type TaskName =
   | "marketStatus"
   | "sectorLevels"
   | "sectorConstituents"
+  | "bseCodes"
   | "corporateEvents"
   | "optionChain"
   | "quotes"
@@ -37,6 +38,8 @@ const CADENCE: Record<TaskName, { source: SourceKey; open: number | null; closed
   quotes: { source: "YAHOO_QUOTES", open: 1, closed: 30 },
   news: { source: "GOOGLE_NEWS", open: 60, closed: 360 },
   sectorConstituents: { source: "NIFTY_CONSTITUENTS", open: null, closed: null },
+  // One request covers every listed equity, so this is cheap and daily.
+  bseCodes: { source: "BSE_QUOTES", open: null, closed: null },
   corporateEvents: { source: "NSE_EVENT_CALENDAR", open: null, closed: null },
   // Bars and indicators are a post-close job: intraday they would be rewritten
   // every tick for a candle that is not finished yet.
@@ -47,6 +50,7 @@ const CADENCE: Record<TaskName, { source: SourceKey; open: number | null; closed
 /** Tasks pinned to a time of day rather than an interval, in IST minutes. */
 const DAILY_WINDOWS: Partial<Record<TaskName, number[]>> = {
   sectorConstituents: [8 * 60],
+  bseCodes: [8 * 60 + 30],
   corporateEvents: [8 * 60 + 15, 12 * 60 + 30, 18 * 60],
   dailyBars: [16 * 60 + 15],
   prune: [3 * 60],

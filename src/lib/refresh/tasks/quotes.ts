@@ -2,6 +2,8 @@ import { env } from "@/env";
 import { istDayKey } from "@/lib/date/ist";
 import { prisma } from "@/lib/prisma";
 import { ProviderError } from "@/lib/providers/errors";
+import { isCircuitOpen } from "@/lib/providers/circuit";
+import { fetchBseQuote } from "@/lib/providers/bse";
 import { fetchChart } from "@/lib/providers/yahoo";
 
 import { runTask, type RunOutcome } from "../run-task";
@@ -96,11 +98,17 @@ export async function refreshQuotes(
 
       const shares = await prisma.share.findMany({
         where: { id: { in: ids } },
-        select: { id: true, symbol: true, yahooSymbol: true, notFoundCount: true },
+        select: {
+          id: true, symbol: true, yahooSymbol: true, notFoundCount: true, bseScripCode: true,
+        },
       });
 
       let updated = 0;
-      let blocked = false;
+      let viaBse = 0;
+      // Once Yahoo has told us to back off, asking it again for every share in
+      // the batch burns the entire tick on requests we already know will be
+      // refused. Check once, up front, and route the whole batch to BSE.
+      let blocked = isCircuitOpen("query1.finance.yahoo.com");
 
       for (const share of shares) {
         if (blocked || context.expired()) break;
@@ -128,6 +136,7 @@ export async function refreshQuotes(
               volume: quote.volume,
               currency: quote.currency,
               quotedAt: quote.quotedAt ?? new Date(),
+              quoteSource: "NSE",
               notFoundCount: 0,
             },
           });
@@ -174,19 +183,79 @@ export async function refreshQuotes(
           }
 
           if (error.kind === "BLOCKED") {
-            // The host has asked us to stop. Abandon the rest of the batch
-            // rather than walking the remaining nineteen into the same wall.
+            // Yahoo has asked us to stop, and it means it for hours. Rather
+            // than leave the whole panel priceless, fall back to BSE — a
+            // different company's servers listing the same shares. Prices are
+            // recorded as BSE and labelled on screen, because the two exchanges
+            // do not print the same number and pretending otherwise would be a
+            // small quiet lie.
             blocked = true;
+
+            const recovered = await quoteViaBse(share);
+            if (recovered) {
+              updated++;
+              viaBse++;
+              continue;
+            }
+
             if (updated === 0) throw error;
           }
         }
       }
 
+      // Whatever Yahoo did not serve, try BSE for.
+      if (blocked) {
+        const done = new Set<string>();
+        for (const share of shares) {
+          if (context.expired()) break;
+          if (done.has(share.id)) continue;
+          done.add(share.id);
+          if (await quoteViaBse(share)) {
+            updated++;
+            viaBse++;
+          }
+        }
+      }
+
+      if (updated === 0) {
+        return { itemCount: 0, note: "no quotes available from either source" };
+      }
+
       return {
         itemCount: updated,
-        note: blocked ? `stopped early — upstream backed us off after ${updated}` : undefined,
+        note: viaBse > 0 ? `${viaBse} via BSE — Yahoo is rate limiting` : undefined,
       };
     },
     { ignoreBackoff: args.ignoreBackoff },
   );
+}
+
+/**
+ * A fallback price from BSE. Returns false when the share has no scrip code or
+ * BSE has nothing for it, which is a normal outcome rather than an error.
+ */
+async function quoteViaBse(share: { id: string; bseScripCode: string | null }): Promise<boolean> {
+  if (!share.bseScripCode) return false;
+
+  try {
+    const quote = await fetchBseQuote(share.bseScripCode);
+    if (quote.lastPrice == null) return false;
+
+    await prisma.share.update({
+      where: { id: share.id },
+      data: {
+        lastPrice: quote.lastPrice,
+        previousClose: quote.previousClose,
+        dayChange: quote.change,
+        dayChangePercent: quote.changePercent,
+        dayHigh: quote.dayHigh,
+        dayLow: quote.dayLow,
+        quotedAt: new Date(),
+        quoteSource: "BSE",
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }

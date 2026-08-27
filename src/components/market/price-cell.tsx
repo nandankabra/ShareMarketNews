@@ -17,12 +17,15 @@ export function PriceCell({
   value,
   quotedAt,
   now,
+  source,
   className,
   showAge = false,
 }: {
   value: number | null | undefined;
   quotedAt?: Date | null;
   now: number;
+  /** Which exchange this price came from. Only shown when it is not NSE. */
+  source?: string | null;
   className?: string;
   showAge?: boolean;
 }) {
@@ -40,9 +43,18 @@ export function PriceCell({
     <span className={cn("inline-flex flex-col items-end leading-tight", className)}>
       <span
         className={cn("tabular font-mono", stale && "text-muted-foreground")}
-        title={quotedAt ? `Quoted ${quotedAt.toISOString()}` : undefined}
+        title={
+          quotedAt
+            ? `${source === "BSE" ? "BSE" : "NSE"} price, quoted ${quotedAt.toISOString()}`
+            : undefined
+        }
       >
         {formatInr(value)}
+        {/* NSE is the reference everywhere else in the panel, so a BSE price is
+            marked rather than passed off as one. */}
+        {source === "BSE" ? (
+          <sup className="text-muted-foreground ml-0.5 font-mono text-[8px] tracking-wide">BSE</sup>
+        ) : null}
       </span>
       {showAge && quotedAt ? (
         <span className="text-muted-foreground font-mono text-[10px]">

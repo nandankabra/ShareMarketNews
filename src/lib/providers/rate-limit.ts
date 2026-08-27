@@ -20,6 +20,7 @@ const HOST_FLOOR_MS: Record<string, number> = {
   // just get rate limited, it invalidates the session cookie.
   "www.nseindia.com": 2_000,
   "www.niftyindices.com": 2_000,
+  "api.bseindia.com": 1_500,
   // Touched rarely, and the easiest of the four to get blocked on.
   "news.google.com": 3_000,
 };

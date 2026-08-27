@@ -96,6 +96,8 @@ export const SourceKey = union([
    *  daily bars job for that day. */
   "YAHOO_DAILY_BARS",
   "YAHOO_SEARCH",
+  /** Fallback prices, used when Yahoo is rate limiting. */
+  "BSE_QUOTES",
   "GOOGLE_NEWS",
 ] as const);
 export type SourceKey = (typeof SourceKey.values)[number];
