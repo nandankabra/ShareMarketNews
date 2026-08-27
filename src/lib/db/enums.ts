@@ -90,6 +90,11 @@ export const SourceKey = union([
   "NSE_OPTION_CHAIN",
   "NIFTY_CONSTITUENTS",
   "YAHOO_QUOTES",
+  /** Post-close bars + indicators. Separate from YAHOO_QUOTES on purpose: they
+   *  share an upstream but not a schedule, and one bookkeeping row cannot carry
+   *  two cadences — a quotes run just before 16:15 would silently suppress the
+   *  daily bars job for that day. */
+  "YAHOO_DAILY_BARS",
   "YAHOO_SEARCH",
   "GOOGLE_NEWS",
 ] as const);

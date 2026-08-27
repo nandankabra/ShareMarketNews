@@ -6,7 +6,7 @@ import type { SourceKey } from "@/lib/db/enums";
 const ALL: SourceKey[] = [
   "NSE_MARKET_STATUS", "NSE_ALL_INDICES", "NSE_EQUITY_MASTER", "NSE_EVENT_CALENDAR",
   "NSE_CORPORATE_ACTIONS", "NSE_OPTION_CHAIN", "NIFTY_CONSTITUENTS", "YAHOO_QUOTES",
-  "YAHOO_SEARCH", "GOOGLE_NEWS",
+  "YAHOO_DAILY_BARS", "YAHOO_SEARCH", "GOOGLE_NEWS",
 ];
 
 /** Every source succeeded `minutesAgo` ago and nothing is backing off. */
@@ -73,6 +73,29 @@ describe("dueTasks", () => {
     const due = dueTasks(saturday, false, rows(saturday, 10_000));
     expect(due).not.toContain("corporateEvents");
     expect(due).not.toContain("sectorConstituents");
+  });
+
+  it("keeps daily bars off the intraday schedule", () => {
+    // Rewriting an unfinished candle every tick is worse than waiting for the
+    // close, so bars are a post-close job only.
+    expect(dueTasks(MID_SESSION, true, rows(MID_SESSION, 10_000))).not.toContain("dailyBars");
+  });
+
+  it("runs daily bars in the post-close window", () => {
+    // 10:45Z = 16:15 IST.
+    const postClose = new Date("2026-08-27T10:45:00Z");
+    expect(dueTasks(postClose, false, rows(postClose, 10_000))).toContain("dailyBars");
+  });
+
+  it("does not let a quotes run suppress the daily bars job", () => {
+    // They share an upstream but not a schedule. When both hung off the same
+    // bookkeeping row, a quotes run at 16:10 silently cancelled that evening's
+    // bars — the whole reason YAHOO_DAILY_BARS is a separate source.
+    const postClose = new Date("2026-08-27T10:45:00Z"); // 16:15 IST
+    const quotesJustRan = rows(postClose, 10_000, {
+      YAHOO_QUOTES: { lastSuccessAt: new Date(postClose.getTime() - 60_000) },
+    });
+    expect(dueTasks(postClose, false, quotesJustRan)).toContain("dailyBars");
   });
 
   it("still prunes at the weekend", () => {

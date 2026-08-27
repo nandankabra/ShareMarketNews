@@ -18,6 +18,7 @@ export type TaskName =
   | "optionChain"
   | "quotes"
   | "news"
+  | "dailyBars"
   | "prune";
 
 export type FetchRow = {
@@ -37,6 +38,9 @@ const CADENCE: Record<TaskName, { source: SourceKey; open: number | null; closed
   news: { source: "GOOGLE_NEWS", open: 60, closed: 360 },
   sectorConstituents: { source: "NIFTY_CONSTITUENTS", open: null, closed: null },
   corporateEvents: { source: "NSE_EVENT_CALENDAR", open: null, closed: null },
+  // Bars and indicators are a post-close job: intraday they would be rewritten
+  // every tick for a candle that is not finished yet.
+  dailyBars: { source: "YAHOO_DAILY_BARS", open: null, closed: null },
   prune: { source: "GOOGLE_NEWS", open: null, closed: null },
 };
 
@@ -44,6 +48,7 @@ const CADENCE: Record<TaskName, { source: SourceKey; open: number | null; closed
 const DAILY_WINDOWS: Partial<Record<TaskName, number[]>> = {
   sectorConstituents: [8 * 60],
   corporateEvents: [8 * 60 + 15, 12 * 60 + 30, 18 * 60],
+  dailyBars: [16 * 60 + 15],
   prune: [3 * 60],
 };
 

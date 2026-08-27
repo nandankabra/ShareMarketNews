@@ -25,6 +25,7 @@ const LABELS: Record<string, string> = {
   NSE_OPTION_CHAIN: "Nifty option chain",
   NIFTY_CONSTITUENTS: "Sector constituents",
   YAHOO_QUOTES: "Share prices",
+  YAHOO_DAILY_BARS: "Daily bars & indicators",
   YAHOO_SEARCH: "Share search",
   GOOGLE_NEWS: "News headlines",
 };

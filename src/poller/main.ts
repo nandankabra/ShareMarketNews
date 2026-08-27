@@ -7,6 +7,7 @@ import { openCircuits } from "@/lib/providers/circuit";
 import { dueTasks, type FetchRow, type TaskName } from "@/lib/refresh/schedule";
 import type { RunOutcome } from "@/lib/refresh/run-task";
 import { refreshCorporateEvents } from "@/lib/refresh/tasks/corporate-events";
+import { pruneIntraday, refreshDailyBars } from "@/lib/refresh/tasks/daily-snapshot";
 import { refreshMarketStatus } from "@/lib/refresh/tasks/market-status";
 import { pruneNews, refreshNewsSweep } from "@/lib/refresh/tasks/news";
 import { pruneOptionChains, refreshOptionChains } from "@/lib/refresh/tasks/option-chain";
@@ -87,9 +88,17 @@ async function runTaskByName(name: TaskName, marketOpen: boolean): Promise<void>
       return report(name, await refreshQuotes({ tiers: marketOpen ? ["A", "B", "C"] : ["A"] }));
     case "news":
       return report(name, await refreshNewsSweep());
+    case "dailyBars":
+      // Sliced: a four-hundred-share universe drips through over several ticks
+      // rather than monopolising one.
+      return report(name, await refreshDailyBars({ limit: 25 }));
     case "prune": {
-      const [news, chains] = await Promise.all([pruneNews(), pruneOptionChains()]);
-      log(`  ✓ prune: ${news} article(s), ${chains} option snapshot(s)`);
+      const [news, chains, intraday] = await Promise.all([
+        pruneNews(),
+        pruneOptionChains(),
+        pruneIntraday(env.INTRADAY_RETENTION_DAYS),
+      ]);
+      log(`  ✓ prune: ${news} article(s), ${chains} chain(s), ${intraday} intraday bar(s)`);
       return;
     }
   }
