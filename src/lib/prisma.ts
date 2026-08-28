@@ -1,6 +1,7 @@
 import path from "node:path";
 
-import { PrismaBetterSQLite3 } from "@prisma/adapter-better-sqlite3";
+import { createRequire } from "node:module";
+
 import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import { PrismaClient } from "@prisma/client";
 
@@ -40,6 +41,11 @@ function resolveDatabaseUrl(url: string): string {
  * In production the database moves to Turso and this file swaps to
  * @prisma/adapter-libsql, where both become the server's problem.
  */
+/** Resolved at call time, so a remote deployment never touches the addon. */
+function loadBetterSqlite3(): typeof import("@prisma/adapter-better-sqlite3") {
+  return createRequire(import.meta.url)("@prisma/adapter-better-sqlite3");
+}
+
 function createClient(): PrismaClient {
   // libSQL *is* SQLite, so nothing about the schema changes between the two —
   // same provider, same absent enums and JSON. Only the transport differs, and
@@ -47,9 +53,16 @@ function createClient(): PrismaClient {
   // set on a local file and Turso's problem on a remote one.
   const remote = env.DATABASE_URL.startsWith("libsql:") || env.DATABASE_URL.startsWith("https:");
 
+  // better-sqlite3 is a native addon, and it is required lazily rather than
+  // imported at the top of the file on purpose: a Turso deployment never uses
+  // it, and a static import would still pull the binary into the serverless
+  // bundle and fail at load on a platform it was not compiled for.
   const adapter = remote
     ? new PrismaLibSQL({ url: env.DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN })
-    : new PrismaBetterSQLite3({ url: resolveDatabaseUrl(env.DATABASE_URL), timeout: 5_000 });
+    : new (loadBetterSqlite3().PrismaBetterSQLite3)({
+        url: resolveDatabaseUrl(env.DATABASE_URL),
+        timeout: 5_000,
+      });
 
   return new PrismaClient({
     adapter,

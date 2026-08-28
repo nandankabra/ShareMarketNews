@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "postinstall": "prisma generate",
+    "build": "prisma generate && next build",
     "start": "next start",
     "poller": "tsx src/poller/main.ts",
     "poller:dev": "tsx watch --clear-screen=false src/poller/main.ts",
