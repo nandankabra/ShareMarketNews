@@ -1,7 +1,20 @@
 # Going live
 
-A checklist. Steps 1–3 need accounts only you can create; everything else is
-already in the repo.
+**The short version.** Log in to both services — these open a browser, so only
+you can do them — then run one script:
+
+```bash
+turso auth login
+vercel login
+bash scripts/deploy.sh
+```
+
+That creates the database, pushes the schema, loads the first data from this
+machine, generates and sets an access password, and deploys. It is safe to
+re-run; every step checks whether it has already been done.
+
+The rest of this page is what that script does, in case you would rather do it
+by hand or something goes wrong.
 
 ## Before you deploy — read this one
 
