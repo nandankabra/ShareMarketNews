@@ -1,79 +1,93 @@
 # Hosting this for ₹0
 
-## The constraint that decides everything
+## The constraint everyone assumes, and what was actually measured
 
-**NSE blocks cloud datacenters.** Requests to `nseindia.com` from AWS, Azure and
-Google Cloud time out or return 403, consistently. It is not a User-Agent
-problem and no header fixes it.
+The received wisdom — and what this document said until it was checked — is
+that **NSE IP-blocks cloud datacenters**, so the fetching has to leave from a
+residential connection, so the poller has to run on your own machine, so the
+database has to be somewhere both it and the web app can reach.
 
-No free cloud host solves this. Oracle's always-free VM is a datacenter IP too,
-and so are GitHub Actions runners. The NSE fetches have to leave from a
-residential connection.
+That is a long chain of consequences resting on one claim, and the claim is
+wrong for this deployment. `GET /api/probe` runs every upstream from the
+deployed host and prints what happened. From Vercel's `iad1`:
 
-Two further limits rule out the obvious answer:
+| Source | Result |
+|---|---|
+| `nseindia.com` market status | ok — `Close · NIFTY 24175.65` |
+| `nseindia.com` all indices | ok — 139 indices |
+| `nseindia.com` event calendar | ok — 51 events |
+| `nseindia.com` option chain | ok — 18 expiries |
+| `nseindia.com` historical OHLC | ok |
+| `niftyindices.com` constituents | ok |
+| `news.google.com` RSS | ok — 40 items |
+| `api.bseindia.com` quote | ok |
+| `query1.finance.yahoo.com` | **BLOCKED — 429** |
 
-- Vercel's free plan runs cron **once per day**, with hour-level precision.
-- Its free functions time out at **10 seconds**.
+NSE answers a datacenter fine. **Yahoo is the one that refuses**, which is
+precisely backwards from the assumption, and it matters because Yahoo was the
+only planned source of daily bars — candles, RSI, MACD, ATR and the support
+levels all read from them. `nse/parse-historical.ts` exists because of this.
 
-So the poller cannot live there either.
+Two caveats worth keeping. This was measured from one region on one day, and
+bot defences change without notice — rerun the probe rather than trusting this
+table. And "answers today" is not permission: the politeness layer matters more
+now that requests leave from a shared address, where being rude gets a whole
+datacenter blocked rather than just you.
 
 ## The shape that follows
 
-Split the write path from the read path. This costs nothing architecturally,
-because the app was already designed never to call upstream while rendering.
+With every upstream reachable from the host, the split architecture is
+unnecessary. There is no poller, no database, and nothing to keep in sync.
 
 | Layer | Where | Cost |
 |---|---|---|
-| **Poller** (fetches, classifies, computes) | Your Mac, or a Raspberry Pi at home | Free |
-| **Database** | Turso (libSQL) — 5 GB, 500M row reads/month | Free |
-| **The app** (read-only) | Vercel Hobby | Free |
+| Fetching, parsing, indicators | Inside the request, on Vercel | Free |
+| Cache | Next.js Data Cache (`unstable_cache`) | Free |
+| Watchlist | A cookie in your browser | Free |
 
-### Moving the database to Turso
+### What replaced the database
 
-libSQL *is* SQLite, so the schema does not change — same provider, same
-no-enums and no-JSON constraints already designed around.
+The database existed to buffer: the poller wrote on its own schedule and pages
+read from disk, so nobody waited on an upstream and the upstreams saw a slow
+drip rather than a burst. The cache does the same job from the other side.
 
-```bash
-npm install @prisma/adapter-libsql
-```
+An entry is keyed by the call and its arguments and shared across every
+visitor, so **an upstream is called once per revalidation window no matter how
+many people load the page**. That is a stronger guarantee than the per-host
+queue gave, not a weaker one — the queue spaced requests out, this removes
+most of them.
 
-Then in `src/lib/prisma.ts`, swap `PrismaBetterSQLite3` for `PrismaLibSQL` and
-set `DATABASE_URL=libsql://...` plus `TURSO_AUTH_TOKEN`. The WAL and
-busy-timeout pragmas become unnecessary — `ensurePragmas()` already warns and
-continues rather than failing when they are rejected.
+Failures are cached too, for one window. It looks wrong and is not: a rejected
+promise is not cached at all, so a failing upstream would be re-hit on every
+single request, which is exactly the stampede this layer exists to prevent.
 
-Local development keeps pointing at a plain file.
+TTLs live in `src/lib/live/cache.ts`.
 
-### When your machine is off
+### What it costs
 
-The site stays up and serves the last sync behind its staleness banner. That is
-the behaviour `/health` and `StaleBanner` were built for, not a degraded
-special case.
+**Quotes have no batch endpoint.** Yahoo's batch paths need a crumb, and NSE's
+`equity-stockIndices` — which used to return a whole index with prices in one
+response — was removed and now 404s. So a quote is one call per share, and a
+sector page quotes a bounded number of its constituents rather than all of
+them. The rest of the table renders without a price; each quote is cached
+independently, so a second visit finds the earlier ones warm.
 
-Optionally, a GitHub Actions workflow on a 30-minute schedule can keep the
-*cloud-tolerant* sources fresh — Yahoo and Google News both answer datacenter
-IPs. Only the NSE event calendar goes stale, and `/health` names it.
+**The sector grid no longer shows each sector's top gainer and loser.** That
+needs a quote for every constituent of every sector — something the poller had
+already collected, and which would now be hundreds of calls to render one
+screen. Those live on the sector page instead.
+
+**The watchlist lives in one browser.** It does not follow you to your phone,
+and clearing site data clears it.
+
+**"New to you" is weaker.** The old highlight compared a story against
+`firstSeenAt`, a fact only a database could hold. Without one, freshness is
+measured from the published time, so a story published three hours ago and
+discovered just now reads as three hours old.
 
 ## Verify before relying on any of this
 
-Deploy `scripts/smoke-providers.ts` as a one-off function and read the table. If
-NSE answers from your host, the poller can move to the cloud and this whole
-document collapses to "run it anywhere". Plan for it not to.
-
-## Politeness
-
-These are unofficial, unauthenticated endpoints being read by a personal,
-non-commercial tool. That is designed in, not bolted on:
-
-- One client, one process. Every request goes through a per-host serialized
-  queue in `src/lib/providers/rate-limit.ts`. There is no `Promise.all` in the
-  refresh path anywhere.
-- Per-host minimum gaps are constants in code — Yahoo 1.2s, NSE 2s,
-  niftyindices 2s, Google News 3s. The env override can only make them longer.
-- A 429 is treated as `BLOCKED`, not as retryable. It opens a circuit and the
-  app stops calling that host entirely for five minutes.
-- Twenty quotes per sixty-second tick is roughly twenty-four seconds of network
-  per minute. The loop is idle more than half the time by construction.
-
-Do not raise these limits to make the panel feel faster. Raise the tick budget
-only if you have moved to a paid data provider that permits it.
+Open `/api/probe` on the deployed host and read the table. It is the first
+thing to run when the app looks wrong, because it separates "an upstream
+changed" from "we broke it" — and, as the top of this page shows, it is also
+how an assumption that shaped the entire design turned out to be false.

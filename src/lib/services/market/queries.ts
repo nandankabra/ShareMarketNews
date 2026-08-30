@@ -1,21 +1,37 @@
 import "server-only";
 
-import { istToday } from "@/lib/date/ist";
-import { prisma } from "@/lib/prisma";
+import { liveMarketStatus } from "@/lib/live/sources";
 
-/** Header state: is the market open, and where is the Nifty. */
+/**
+ * Header state: is the market open, and where is the Nifty.
+ *
+ * Rendered in the app shell, so it runs on every page — which is exactly why
+ * it is one cached call and not a fan-out. When NSE is unreachable the header
+ * says "Unknown" rather than the page failing: the status bar is the least
+ * important thing on any screen and has no business taking the rest down.
+ */
 export async function getMarketHeader() {
-  const [snapshot, quoteFetch] = await Promise.all([
-    prisma.marketSnapshot.findUnique({ where: { tradeDate: istToday() } }),
-    prisma.sourceFetch.findUnique({ where: { source: "YAHOO_QUOTES" } }),
-  ]);
+  const status = await liveMarketStatus();
+
+  if (!status.ok) {
+    return {
+      status: "Unknown",
+      isOpen: false,
+      niftyLevel: null,
+      niftyChangePercent: null,
+      capturedAt: null,
+      quotesLastSuccessAt: null,
+      error: status.error,
+    };
+  }
 
   return {
-    status: snapshot?.status ?? "Unknown",
-    isOpen: (snapshot?.status ?? "").toLowerCase() === "open",
-    niftyLevel: snapshot?.niftyLevel ?? null,
-    niftyChangePercent: snapshot?.niftyChangePercent ?? null,
-    capturedAt: snapshot?.capturedAt ?? null,
-    quotesLastSuccessAt: quoteFetch?.lastSuccessAt ?? null,
+    status: status.data.status,
+    isOpen: status.data.isOpen,
+    niftyLevel: status.data.niftyLevel,
+    niftyChangePercent: status.data.niftyChangePercent,
+    capturedAt: new Date(status.at),
+    quotesLastSuccessAt: new Date(status.at),
+    error: null as string | null,
   };
 }
