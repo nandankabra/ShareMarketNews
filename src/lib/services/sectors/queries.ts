@@ -1,7 +1,7 @@
 import "server-only";
 
-import { addDaysIst, istToday } from "@/lib/date/ist";
-import { prisma } from "@/lib/prisma";
+import { liveConstituents, liveIndices, liveQuote } from "@/lib/live/sources";
+import { SECTOR_CATALOGUE } from "@/lib/sectors/catalogue";
 
 export type SectorSummary = {
   key: string;
@@ -10,52 +10,43 @@ export type SectorSummary = {
   lastLevel: number | null;
   lastChangePercent: number | null;
   levelAt: Date | null;
-  constituentsSyncedAt: Date | null;
-  memberCount: number;
+  /** Null means "not counted", which is different from a sector of zero. */
+  memberCount: number | null;
   topGainer: { symbol: string; changePercent: number } | null;
   topLoser: { symbol: string; changePercent: number } | null;
 };
 
 /**
- * The sector grid.
+ * The sector grid, from a single upstream call.
  *
- * Memberships are loaded with their shares in one query rather than one query
- * per sector — sixteen sectors would otherwise be seventeen round trips before
- * the page renders anything.
+ * `/api/allIndices` returns the level and day change for every index at once,
+ * so sixteen cards cost one request — and behind the cache, one request per
+ * few minutes however many people are looking.
+ *
+ * What the grid deliberately no longer shows is each sector's top gainer and
+ * loser. Those need a quote for every constituent of every sector; with a
+ * database the poller had already collected them, but computing them here
+ * would mean hundreds of calls to render one screen. They remain on the sector
+ * page, where the cost is one sector's worth.
  */
 export async function listSectors(): Promise<SectorSummary[]> {
-  const sectors = await prisma.sector.findMany({
-    orderBy: { sortIndex: "asc" },
-    include: {
-      memberships: {
-        select: { share: { select: { symbol: true, dayChangePercent: true } } },
-      },
-    },
-  });
+  const indices = await liveIndices();
+  const byName = new Map(
+    (indices.ok ? indices.data : []).map((index) => [index.index.toUpperCase(), index]),
+  );
 
-  return sectors.map((sector) => {
-    const moved = sector.memberships
-      .map((membership) => membership.share)
-      .filter((share): share is { symbol: string; dayChangePercent: number } =>
-        share.dayChangePercent != null,
-      )
-      .sort((a, b) => b.dayChangePercent - a.dayChangePercent);
-
+  return SECTOR_CATALOGUE.map((sector) => {
+    const level = byName.get(sector.name.toUpperCase());
     return {
       key: sector.key,
       name: sector.name,
       displayName: sector.displayName,
-      lastLevel: sector.lastLevel,
-      lastChangePercent: sector.lastChangePercent,
-      levelAt: sector.levelAt,
-      constituentsSyncedAt: sector.constituentsSyncedAt,
-      memberCount: sector.memberships.length,
-      topGainer: moved[0]
-        ? { symbol: moved[0].symbol, changePercent: moved[0].dayChangePercent }
-        : null,
-      topLoser: moved.at(-1)
-        ? { symbol: moved.at(-1)!.symbol, changePercent: moved.at(-1)!.dayChangePercent }
-        : null,
+      lastLevel: level?.last ?? null,
+      lastChangePercent: level?.percentChange ?? null,
+      levelAt: indices.ok ? new Date(indices.at) : null,
+      memberCount: null,
+      topGainer: null,
+      topLoser: null,
     };
   });
 }
@@ -78,96 +69,86 @@ export type ConstituentRow = {
   inWatchlist: boolean;
 };
 
-export async function getSectorDetail(key: string) {
-  const sector = await prisma.sector.findUnique({
-    where: { key },
-    include: {
-      memberships: {
-        include: { share: { include: { watchlist: true } } },
-      },
-    },
-  });
+/**
+ * How many constituents may be quoted while rendering one sector page.
+ *
+ * Quotes are one upstream call each — there is no batch endpoint that answers
+ * without a crumb, and NSE's own `equity-stockIndices`, which used to return a
+ * whole index with prices in one response, has been removed and now 404s.
+ *
+ * At the 1200ms politeness floor, twelve is about fifteen seconds on a cold
+ * cache and comfortably inside the function timeout. The rest of the table
+ * renders without a price rather than making the page wait, and each quote is
+ * cached independently, so a second visit finds the earlier ones already warm.
+ */
+const QUOTE_BUDGET = 12;
 
+export async function getSectorDetail(key: string) {
+  const sector = SECTOR_CATALOGUE.find((candidate) => candidate.key === key);
   if (!sector) return null;
 
-  const shareIds = sector.memberships.map((membership) => membership.shareId);
-  const today = istToday();
-  const horizon = addDaysIst(today, 7);
-  const since48h = new Date(Date.now() - 48 * 60 * 60_000);
+  const [indices, constituents] = [await liveIndices(), sector.constituentsFile
+    ? await liveConstituents(sector.constituentsFile)
+    : null];
 
-  // Two aggregate queries rather than two per share.
-  const [newsCounts, events] = await Promise.all([
-    prisma.shareNewsMention.groupBy({
-      by: ["shareId"],
-      where: { shareId: { in: shareIds }, article: { publishedAt: { gte: since48h } } },
-      _count: { _all: true },
-    }),
-    prisma.corporateEvent.findMany({
-      where: { shareId: { in: shareIds }, eventDate: { gte: today, lte: horizon } },
-      orderBy: { eventDate: "asc" },
-      select: { shareId: true, eventDate: true, type: true },
-    }),
-  ]);
+  const level = indices.ok
+    ? indices.data.find((index) => index.index.toUpperCase() === sector.name.toUpperCase())
+    : undefined;
 
-  const newsByShare = new Map(newsCounts.map((row) => [row.shareId, row._count._all]));
-  const eventByShare = new Map<string, { eventDate: string; type: string }>();
-  for (const event of events) {
-    if (event.shareId && !eventByShare.has(event.shareId)) {
-      eventByShare.set(event.shareId, { eventDate: event.eventDate, type: event.type });
+  const members = constituents?.ok ? constituents.data : [];
+
+  // Sequential, never Promise.all: one request in flight per host is the whole
+  // politeness story, and it is not negotiable for a convenience like this.
+  const rows: ConstituentRow[] = [];
+  for (const [position, member] of members.entries()) {
+    let quote = null;
+    if (position < QUOTE_BUDGET) {
+      const result = await liveQuote(member.symbol, "5d");
+      if (result.ok) quote = result.data;
     }
+
+    const dayChange =
+      quote?.lastPrice != null && quote.previousClose != null
+        ? quote.lastPrice - quote.previousClose
+        : null;
+
+    rows.push({
+      id: member.symbol,
+      symbol: member.symbol,
+      name: member.name,
+      lastPrice: quote?.lastPrice ?? null,
+      dayChange,
+      dayChangePercent:
+        dayChange != null && quote?.previousClose ? (dayChange / quote.previousClose) * 100 : null,
+      dayLow: quote?.dayLow ?? null,
+      dayHigh: quote?.dayHigh ?? null,
+      volume: quote?.volume ?? null,
+      quotedAt: quote?.quotedAt ? new Date(quote.quotedAt) : null,
+      quoteSource: quote ? "YAHOO" : null,
+      rsi14: null,
+      newsCount: 0,
+      nextEvent: null,
+      inWatchlist: false,
+    });
   }
 
-  const rows: ConstituentRow[] = sector.memberships
-    .map((membership) => {
-      const share = membership.share;
-      return {
-        id: share.id,
-        symbol: share.symbol,
-        name: share.name,
-        lastPrice: share.lastPrice,
-        dayChange: share.dayChange,
-        dayChangePercent: share.dayChangePercent,
-        dayLow: share.dayLow,
-        dayHigh: share.dayHigh,
-        volume: share.volume,
-        quotedAt: share.quotedAt,
-        quoteSource: share.quoteSource,
-        rsi14: share.rsi14,
-        newsCount: newsByShare.get(share.id) ?? 0,
-        nextEvent: eventByShare.get(share.id) ?? null,
-        inWatchlist: share.watchlist != null,
-      };
-    })
-    // Unquoted shares sort last rather than reading as a 0% day.
-    .sort((a, b) => {
-      if (a.dayChangePercent == null && b.dayChangePercent == null) return a.symbol.localeCompare(b.symbol);
-      if (a.dayChangePercent == null) return 1;
-      if (b.dayChangePercent == null) return -1;
-      return b.dayChangePercent - a.dayChangePercent;
-    });
+  const moved = rows
+    .filter((row): row is ConstituentRow & { dayChangePercent: number } => row.dayChangePercent != null)
+    .sort((a, b) => b.dayChangePercent - a.dayChangePercent);
 
   return {
     key: sector.key,
     name: sector.name,
     displayName: sector.displayName,
-    lastLevel: sector.lastLevel,
-    lastChangePercent: sector.lastChangePercent,
-    levelAt: sector.levelAt,
-    constituentsSyncedAt: sector.constituentsSyncedAt,
+    lastLevel: level?.last ?? null,
+    lastChangePercent: level?.percentChange ?? null,
+    levelAt: indices.ok ? new Date(indices.at) : null,
+    constituentsSyncedAt: constituents?.ok ? new Date(constituents.at) : null,
+    constituentsError: constituents && !constituents.ok ? constituents.error : null,
+    topGainer: moved[0] ? { symbol: moved[0].symbol, changePercent: moved[0].dayChangePercent } : null,
+    topLoser: moved.at(-1)
+      ? { symbol: moved.at(-1)!.symbol, changePercent: moved.at(-1)!.dayChangePercent }
+      : null,
     rows,
   };
-}
-
-/**
- * Promote a sector's shares into refresh tier B.
- *
- * Fire-and-forget from the page: looking at a sector is the signal that its
- * prices are worth keeping fresh for the next couple of hours.
- */
-export async function markSectorViewed(shareIds: string[]): Promise<void> {
-  if (shareIds.length === 0) return;
-  await prisma.share.updateMany({
-    where: { id: { in: shareIds } },
-    data: { lastViewedAt: new Date() },
-  });
 }

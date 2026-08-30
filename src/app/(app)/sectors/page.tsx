@@ -26,8 +26,7 @@ export default async function SectorsPage() {
         title="Sectors"
         description={
           <>
-            {sectors.length} NSE indices ·{" "}
-            {sectors.reduce((total, sector) => total + sector.memberCount, 0)} constituents tracked
+            {sectors.length} NSE indices
             {quoted < sectors.length ? ` · ${sectors.length - quoted} awaiting a level` : ""}
           </>
         }

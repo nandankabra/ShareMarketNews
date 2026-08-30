@@ -7,6 +7,7 @@ import {
   fetchAllIndices,
   fetchEventCalendar,
   fetchMarketStatus,
+  fetchHistorical,
   fetchOptionExpiries,
 } from "@/lib/providers/nse";
 import { fetchChart } from "@/lib/providers/yahoo";
@@ -91,6 +92,14 @@ export async function GET() {
     await probe("NSE_OPTION_CHAIN", "www.nseindia.com", async () => {
       const expiries = await fetchOptionExpiries("NIFTY");
       return `${expiries.length} expiries${expiries[0] ? `, next ${expiries[0]}` : ""}`;
+    }),
+  );
+
+  rows.push(
+    await probe("NSE_HISTORICAL", "www.nseindia.com", async () => {
+      const bars = await fetchHistorical("TCS", 120);
+      const last = bars.at(-1);
+      return `${bars.length} bars, last ${last?.day} close ${last?.close}`;
     }),
   );
 

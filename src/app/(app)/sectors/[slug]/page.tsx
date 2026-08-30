@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/states";
 import { Card } from "@/components/ui/card";
 import { serverNow } from "@/lib/server-now";
 import { getMarketHeader } from "@/lib/services/market/queries";
-import { getSectorDetail, markSectorViewed } from "@/lib/services/sectors/queries";
+import { getSectorDetail } from "@/lib/services/sectors/queries";
 import { formatInr, relativeTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +36,6 @@ export default async function SectorDetailPage({ params }: { params: Promise<{ s
   // Looking at a sector is the signal that its prices are worth keeping fresh
   // for the next couple of hours. Deliberately not awaited — the page should
   // not wait on a write it does not read.
-  void markSectorViewed(sector.rows.map((row) => row.id));
 
   const withQuotes = sector.rows.filter((row) => row.lastPrice != null).length;
 

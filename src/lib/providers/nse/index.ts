@@ -3,6 +3,7 @@ import { parseAllIndices, type IndexLevel } from "./parse-all-indices";
 import { parseCorporateActions, type CorporateAction } from "./parse-corporate-actions";
 import { parseEventCalendar, type UpcomingEvent } from "./parse-event-calendar";
 import { parseMarketStatus, type MarketStatus } from "./parse-market-status";
+import { parseHistorical, type HistoricalBar } from "./parse-historical";
 import { parseExpiryDates, parseOptionChain, type OptionChain } from "./parse-option-chain";
 
 /**
@@ -75,3 +76,41 @@ export async function fetchOptionChain(
 }
 
 export { nseApiFetch };
+
+/** NSE wants DD-MM-YYYY on this endpoint, unlike every other date it returns. */
+function toNseRange(date: Date): string {
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${day}-${month}-${date.getUTCFullYear()}`;
+}
+
+/**
+ * Daily bars for one share.
+ *
+ * `historical/cm/equity` is the path most clients use and it answered 503 on
+ * every attempt; this older `historicalOR` path is the one that actually
+ * returns data, which is worth writing down because the two look
+ * interchangeable and only one works.
+ *
+ * `days` is calendar days, not bars: roughly 64 trading days come back per
+ * three months, so the default reaches about 250 bars — the window the
+ * support/resistance clustering is defined over.
+ */
+export async function fetchHistorical(symbol: string, days = 420): Promise<HistoricalBar[]> {
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 86_400_000);
+
+  const body = await nseApiFetch(
+    `api/historicalOR/generateSecurityWiseHistoricalData` +
+      `?from=${toNseRange(from)}&to=${toNseRange(to)}` +
+      `&symbol=${encodeURIComponent(symbol)}&type=priceVolumeDeliverable&series=EQ`,
+    {
+      source: "NSE_HISTORICAL",
+      referer: `https://www.nseindia.com/get-quotes/equity?symbol=${encodeURIComponent(symbol)}`,
+    },
+  );
+
+  return parseHistorical(body, symbol);
+}
+
+export type { HistoricalBar };

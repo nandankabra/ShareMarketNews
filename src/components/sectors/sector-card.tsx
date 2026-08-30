@@ -26,11 +26,9 @@ export function SectorCard({ sector, now }: { sector: SectorSummary; now: number
         </div>
 
         <div className="text-muted-foreground mt-2.5 flex items-center justify-between gap-2 border-t pt-2 font-mono text-[10px]">
-          <span>{sector.memberCount} shares</span>
+          <span>{sector.memberCount != null ? `${sector.memberCount} shares` : ""}</span>
           <span>
-            {sector.constituentsSyncedAt
-              ? `synced ${relativeTime(sector.constituentsSyncedAt, new Date(now))}`
-              : "not synced"}
+            {sector.levelAt ? `level ${relativeTime(sector.levelAt, new Date(now))}` : "no level"}
           </span>
         </div>
 
