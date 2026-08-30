@@ -12,9 +12,14 @@ import { relativeTime } from "@/lib/utils";
  * page should agree with every other, which only holds if they all measure
  * from the same instant.
  *
- * The poller is expected to be off much of the time, since it runs on a home
- * machine rather than in the cloud (NSE refuses datacenter IPs). So "stale" is
- * a normal state, and this reads as information rather than an alarm.
+ * What "stale" means changed when the database went away. It used to mean the
+ * poller had not run; it now means the cached answer is old, which in practice
+ * only happens when an upstream has stopped answering — a live fetch refreshes
+ * within its window otherwise. A missing timestamp counts as stale, so this
+ * also covers "the last attempt failed outright".
+ *
+ * Still information rather than an alarm: every page renders its cached values
+ * underneath, and saying how old they are is the whole point.
  */
 export function StaleBanner({
   lastSuccessAt,
@@ -32,9 +37,17 @@ export function StaleBanner({
     <div className="border-primary/30 bg-primary/5 text-foreground mb-4 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm">
       <AlertTriangle className="text-primary size-4 shrink-0" aria-hidden />
       <span>
-        Prices last updated{" "}
-        <strong className="font-mono font-semibold">{relativeTime(lastSuccessAt, new Date(now))}</strong>. The
-        background poller may not be running.
+        {lastSuccessAt ? (
+          <>
+            Market data last refreshed{" "}
+            <strong className="font-mono font-semibold">
+              {relativeTime(lastSuccessAt, new Date(now))}
+            </strong>
+            . An upstream may have stopped answering.
+          </>
+        ) : (
+          <>NSE did not answer the last time we asked. Figures below are whatever was cached.</>
+        )}
       </span>
       <Link href="/health" className="text-primary font-medium underline underline-offset-2">
         Check sources

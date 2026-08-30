@@ -41,7 +41,7 @@ export default async function OptionsPage({
         <PageHeader eyebrow="Derivatives" title="Option chain" />
         <EmptyState
           title={`No chain captured for ${symbol}`}
-          description="The option chain is captured every 15 minutes while the market is open. Run npm run poller, or check /health."
+          description="NSE did not return a chain for this underlying. Chains are re-read every five minutes; check /health to see whether NSE is answering at all."
         />
       </PageShell>
     );

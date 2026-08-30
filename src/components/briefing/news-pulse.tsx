@@ -7,9 +7,13 @@ import { toast } from "sonner";
 /**
  * Notices when a story lands and refreshes the briefing under it.
  *
- * Watches `firstSeenAt` — when the sweep found a story, not when it was
- * published. A piece published three hours ago that the poller only just
- * discovered is new to the reader, and should light up.
+ * Watches the newest story across your watchlist.
+ *
+ * This used to watch `firstSeenAt` — when *we* first saw a story rather than
+ * when it was published, so a piece published three hours ago but discovered
+ * just now would light up, which is the honest meaning of "new to you". Holding
+ * that needed a database. Freshness is now the publication time, so a story
+ * already hours old when we find it arrives looking hours old.
  */
 const POLL_MS = 30_000;
 

@@ -3,10 +3,14 @@ import { cn, formatInr, relativeTime } from "@/lib/utils";
 /**
  * A price, with how old it is.
  *
- * Prices grey out past thirty minutes rather than pretending to be live. The
- * panel reads from a cache a background poller fills, so a number that looked
- * current but was three hours old would be the app lying quietly — which is
- * what this component exists to prevent.
+ * Prices grey out past thirty minutes rather than pretending to be live. Every
+ * figure on the page comes from a shared cache, so a number that looked current
+ * but was three hours old would be the app lying quietly — which is what this
+ * component exists to prevent.
+ *
+ * It matters more for prices than it looks: NSE's daily bars are the source, so
+ * outside market hours the newest close can legitimately be a day old, and
+ * saying so is better than implying a live tick.
  *
  * `now` arrives as a prop so the whole page measures staleness from one
  * instant, and so rendering stays a pure function of its inputs.

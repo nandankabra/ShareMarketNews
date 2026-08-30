@@ -47,7 +47,7 @@ export default async function HealthPage() {
       <PageHeader
         eyebrow="What's stale, and why"
         title="Data health"
-        description="Every upstream, when it last worked, and when it will next be tried."
+        description="Every upstream, asked directly. This is the first thing to check when the app looks wrong — it separates an upstream changing from us breaking something."
       />
 
       <Card
@@ -58,15 +58,17 @@ export default async function HealthPage() {
       >
         <span className={cn("size-2 rounded-full", poller.running ? "bg-up animate-pulse" : "bg-primary")} aria-hidden />
         <span className="text-sm font-medium">
-          {poller.running ? "A poller has checked in recently" : "No poller has checked in"}
+          {poller.running
+            ? `${stats.working} of ${stats.total} sources answering`
+            : "No source is answering"}
         </span>
         <span className="text-muted-foreground font-mono text-xs">
-          last attempt {relativeTime(poller.lastAttemptAt, nowDate)}
+          checked {relativeTime(poller.lastAttemptAt, nowDate)}
         </span>
         {!poller.running ? (
           <span className="text-muted-foreground text-xs">
-            Run <code className="bg-muted rounded px-1 py-0.5 font-mono">npm run poller</code> in a second
-            terminal to keep this live.
+            Every upstream refused at once, which usually means a network fault rather than eight
+            simultaneous outages.
           </span>
         ) : null}
       </Card>

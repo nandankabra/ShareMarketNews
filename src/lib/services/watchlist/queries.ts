@@ -120,12 +120,22 @@ export async function searchLocalShares(query: string, limit = 8): Promise<Searc
 
   return matches
     .sort((a, b) => {
-      const aId = a.scripId?.toUpperCase() ?? "";
-      const bId = b.scripId?.toUpperCase() ?? "";
-      const aExact = aId === upper ? 0 : aId.startsWith(upper) ? 1 : 2;
-      const bExact = bId === upper ? 0 : bId.startsWith(upper) ? 1 : 2;
-      if (aExact !== bExact) return aExact - bExact;
-      return aId.localeCompare(bId);
+      const rank = (entry: (typeof matches)[number]) => {
+        const id = entry.scripId?.toUpperCase() ?? "";
+        const name = entry.name?.toLowerCase() ?? "";
+        if (id === upper) return 0;
+        if (id.startsWith(upper)) return 1;
+        // A company whose *name* starts with the term outranks an unrelated
+        // ticker that merely contains it. Without this, "infosys" returns HCL
+        // Infosystems above Infosys itself, which is the wrong answer to an
+        // unambiguous question.
+        if (name.startsWith(lower)) return 2;
+        if (name.includes(` ${lower}`)) return 3;
+        return 4;
+      };
+      const difference = rank(a) - rank(b);
+      if (difference !== 0) return difference;
+      return (a.scripId ?? "").localeCompare(b.scripId ?? "");
     })
     .slice(0, limit)
     .map((entry) => ({

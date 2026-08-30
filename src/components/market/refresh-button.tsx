@@ -8,10 +8,14 @@ import { refreshSource } from "@/lib/actions/refresh/actions";
 import { cn } from "@/lib/utils";
 
 /**
- * Runs one source's refresh task in-process.
+ * Drops one source's cached answer, so the next load fetches it again.
  *
- * The same code the poller runs, which is why a machine with no poller is still
- * a usable app rather than a stale one.
+ * This used to run the poller's task for that source. There is no poller, and
+ * "refresh" now means only what you would expect it to mean.
+ *
+ * Worth knowing while clicking it: the cache is shared by everyone, so this is
+ * not a private act — it sends the next render out to the upstream. The action
+ * enforces a cooldown for that reason.
  */
 export function RefreshButton({ source, label }: { source: string; label?: string }) {
   const [pending, startTransition] = useTransition();
