@@ -35,7 +35,17 @@ const csv = (fallback: string[]) =>
     );
 
 const schema = z.object({
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  /**
+   * Optional since the read path moved off the database.
+   *
+   * The deployed app answers from upstream APIs behind a shared cache and never
+   * opens a database at all. Only the local poller and the maintenance scripts
+   * still need this, and they fail loudly at the point of use rather than
+   * taking the whole web app down at import time — which is exactly what a
+   * required value did: an unset variable in the hosting dashboard broke the
+   * *build*, three layers away from anything that wanted a database.
+   */
+  DATABASE_URL: z.string().optional(),
   TURSO_AUTH_TOKEN: z.string().optional(),
 
   /** Unset means the access gate is off — correct for localhost. */

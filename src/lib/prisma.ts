@@ -51,16 +51,24 @@ function createClient(): PrismaClient {
   // same provider, same absent enums and JSON. Only the transport differs, and
   // with it who is responsible for concurrency: the pragmas below are ours to
   // set on a local file and Turso's problem on a remote one.
-  const remote = env.DATABASE_URL.startsWith("libsql:") || env.DATABASE_URL.startsWith("https:");
+  const url = env.DATABASE_URL;
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL is not set. The deployed app reads from upstream APIs and " +
+        "needs no database; only the poller and the scripts in scripts/ do.",
+    );
+  }
+
+  const remote = url.startsWith("libsql:") || url.startsWith("https:");
 
   // better-sqlite3 is a native addon, and it is required lazily rather than
   // imported at the top of the file on purpose: a Turso deployment never uses
   // it, and a static import would still pull the binary into the serverless
   // bundle and fail at load on a platform it was not compiled for.
   const adapter = remote
-    ? new PrismaLibSQL({ url: env.DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN })
+    ? new PrismaLibSQL({ url, authToken: env.TURSO_AUTH_TOKEN })
     : new (loadBetterSqlite3().PrismaBetterSQLite3)({
-        url: resolveDatabaseUrl(env.DATABASE_URL),
+        url: resolveDatabaseUrl(url),
         timeout: 5_000,
       });
 
@@ -72,7 +80,13 @@ function createClient(): PrismaClient {
 
 /** True when this process is talking to a hosted database rather than a file. */
 export function isRemoteDatabase(): boolean {
-  return env.DATABASE_URL.startsWith("libsql:") || env.DATABASE_URL.startsWith("https:");
+  const url = env.DATABASE_URL;
+  return url != null && (url.startsWith("libsql:") || url.startsWith("https:"));
+}
+
+/** True when a database is configured at all. */
+export function hasDatabase(): boolean {
+  return Boolean(env.DATABASE_URL);
 }
 
 const globalForPrisma = globalThis as unknown as {
@@ -80,11 +94,29 @@ const globalForPrisma = globalThis as unknown as {
   prismaPragmas?: Promise<void>;
 };
 
-export const prisma = globalForPrisma.prisma ?? createClient();
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+/**
+ * Constructed on first use, not on import.
+ *
+ * Half the modules in the app import something that imports this file, so an
+ * eager `createClient()` meant that merely *rendering a page* required a
+ * database — and with no `DATABASE_URL` the failure surfaced during Next's
+ * build-time page-data collection, naming `/api/pulse` rather than the missing
+ * variable. Behind a proxy, code that never touches the database never needs
+ * one.
+ */
+function getClient(): PrismaClient {
+  globalForPrisma.prisma ??= createClient();
+  return globalForPrisma.prisma;
 }
+
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_target, property, receiver) {
+    return Reflect.get(getClient(), property, receiver);
+  },
+  has(_target, property) {
+    return Reflect.has(getClient(), property);
+  },
+});
 
 /**
  * Applied once per process, lazily. Failures are warned rather than thrown: a

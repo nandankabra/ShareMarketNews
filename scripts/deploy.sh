@@ -59,12 +59,23 @@ fi
 
 # --- 5. Deploy --------------------------------------------------------------
 say "5/5  Vercel"
-vercel link --yes >/dev/null
+# Interactive on purpose. `--yes` links to a project named after this folder
+# ("market"), which is NOT necessarily the project you deployed — that silently
+# creates a stray third project. Pick the real one, or set VERCEL_PROJECT.
+if [ -n "${VERCEL_PROJECT:-}" ]; then
+  vercel link --yes --project "$VERCEL_PROJECT" >/dev/null
+else
+  vercel link
+fi
 
+# Both targets: a preview build that cannot reach the database fails exactly
+# the same way production did, and the error is just as confusing there.
 set_env() {
-  vercel env rm "$1" production --yes >/dev/null 2>&1 || true
-  printf '%s' "$2" | vercel env add "$1" production >/dev/null
-  echo "     set $1"
+  for tgt in production preview; do
+    vercel env rm "$1" "$tgt" --yes >/dev/null 2>&1 || true
+    printf '%s' "$2" | vercel env add "$1" "$tgt" >/dev/null 2>&1 || true
+  done
+  echo "     set $1 (production + preview)"
 }
 set_env DATABASE_URL     "$DB_URL"
 set_env TURSO_AUTH_TOKEN "$DB_TOKEN"

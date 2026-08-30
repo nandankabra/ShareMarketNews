@@ -18,7 +18,7 @@ import { dayKeyToDate, istDayKey } from "@/lib/date/ist";
 import { prisma } from "@/lib/prisma";
 import { recomputeIndicators } from "@/lib/refresh/tasks/indicators";
 
-if (!env.DATABASE_URL.includes("demo")) {
+if (!env.DATABASE_URL?.includes("demo")) {
   console.error(
     "Refusing to run: DATABASE_URL must point at a scratch database with 'demo' in its name.\n" +
       "  DATABASE_URL=\"file:./demo.db\" npx tsx scripts/dev-demo-bars.ts",

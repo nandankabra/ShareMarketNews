@@ -24,7 +24,7 @@ import { refreshNewsSweep } from "@/lib/refresh/tasks/news";
 import { refreshOptionChains } from "@/lib/refresh/tasks/option-chain";
 import { refreshSectorConstituents, refreshSectorLevels } from "@/lib/refresh/tasks/sector-catalogue";
 
-if (!env.DATABASE_URL.includes("smoke")) {
+if (!env.DATABASE_URL?.includes("smoke")) {
   console.error(
     'Refusing to run: this rewrites data.\n  DATABASE_URL="file:./smoke.db" npx tsx scripts/smoke-refresh.ts',
   );
