@@ -51,8 +51,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <main className="flex-1">{children}</main>
 
       <footer className="text-muted-foreground border-t px-4 py-4 text-center font-mono text-[10px] tracking-wide sm:px-6">
-        Personal, non-commercial. Data from NSE, Yahoo Finance and Google News — descriptive only,
-        never advice.
+        Personal, non-commercial. Prices, bars, events and option chains from NSE; company
+        directory from BSE; headlines from Google News. Descriptive only, never advice.
       </footer>
     </div>
   );
