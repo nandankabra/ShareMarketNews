@@ -1,87 +1,67 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 
 import { failure, success, type ActionResult } from "@/lib/action-result";
 import { requireAccess } from "@/lib/actions/guard";
-import { SourceKey, type SourceKey as SourceKeyType } from "@/lib/db/enums";
-import type { RunOutcome } from "@/lib/refresh/run-task";
-import { refreshCorporateEvents } from "@/lib/refresh/tasks/corporate-events";
-import { refreshDailyBars } from "@/lib/refresh/tasks/daily-snapshot";
-import { refreshMarketStatus } from "@/lib/refresh/tasks/market-status";
-import { refreshNewsSweep } from "@/lib/refresh/tasks/news";
-import { refreshOptionChains } from "@/lib/refresh/tasks/option-chain";
-import { refreshQuotes } from "@/lib/refresh/tasks/quotes";
-import { refreshSectorConstituents, refreshSectorLevels } from "@/lib/refresh/tasks/sector-catalogue";
 
 /**
- * Run one refresh task on demand.
+ * Refresh one source.
  *
- * This calls exactly the same functions the poller schedules — that symmetry is
- * what makes "the poller is not running" a degraded mode rather than a broken
- * app. The poller lives on a home machine that is off most evenings, so this is
- * the normal way to catch up rather than an emergency lever.
+ * This used to run the poller's task for that source and write the result to
+ * the database. There is no poller and no database, so "refresh" now means what
+ * it always meant to you and no longer means anything else: drop the cached
+ * answer, so the next page load asks upstream again.
  *
- * The per-source backoff in `runTask` is deliberately NOT bypassed. If an
- * upstream has told us to go away, clicking a button should not override that —
- * so a wedged source reports how long is left instead of being hammered.
+ * The cooldown survives the rewrite, and matters more than before. Every cached
+ * entry is shared by every visitor, so dropping one is not a private act — it
+ * sends the next render out to the upstream. A held-down button should not
+ * become a burst.
  */
+const TAGS: Record<string, string[]> = {
+  NSE_MARKET_STATUS: ["market-status"],
+  NSE_ALL_INDICES: ["all-indices"],
+  NSE_HISTORICAL: ["history"],
+  NSE_EVENT_CALENDAR: ["event-calendar"],
+  NSE_OPTION_CHAIN: ["option-chain", "option-expiries"],
+  NIFTY_CONSTITUENTS: ["constituents"],
+  GOOGLE_NEWS: ["news"],
+  BSE_DIRECTORY: ["bse-directory"],
+  HEALTH: ["health-probe"],
+};
 
 /** In-memory, per-source. Stops a double-click becoming two requests. */
 const lastRun = new Map<string, number>();
 const CLICK_COOLDOWN_MS = 60_000;
 
-async function dispatch(source: SourceKeyType): Promise<RunOutcome> {
-  switch (source) {
-    case "NSE_MARKET_STATUS":
-      return refreshMarketStatus();
-    case "NSE_ALL_INDICES":
-      return refreshSectorLevels();
-    case "NIFTY_CONSTITUENTS":
-      return refreshSectorConstituents();
-    case "NSE_OPTION_CHAIN":
-      return refreshOptionChains();
-    case "YAHOO_QUOTES":
-      return refreshQuotes();
-    case "YAHOO_DAILY_BARS":
-      return refreshDailyBars({ limit: 25 });
-    case "GOOGLE_NEWS":
-      return refreshNewsSweep();
-    case "NSE_EVENT_CALENDAR":
-    case "NSE_CORPORATE_ACTIONS": {
-      const outcome = await refreshCorporateEvents();
-      return outcome.calendar.status === "OK" ? outcome.calendar : outcome.actions;
-    }
-    default:
-      return { status: "SKIPPED", reason: "no manual refresh for this source" };
-  }
-}
-
 export async function refreshSource(rawSource: string): Promise<ActionResult<{ message: string }>> {
   const denied = await requireAccess();
   if (denied) return denied;
 
-  const parsed = SourceKey.schema.safeParse(rawSource);
-  if (!parsed.success) return failure("Unknown source.");
-  const source = parsed.data;
+  const source = rawSource.toUpperCase();
+  const tags = TAGS[source];
+  if (!tags) return failure(`Nothing to refresh for ${source}.`);
 
   const previous = lastRun.get(source);
   if (previous && Date.now() - previous < CLICK_COOLDOWN_MS) {
-    const seconds = Math.ceil((CLICK_COOLDOWN_MS - (Date.now() - previous)) / 1000);
-    return failure(`Just ran — try again in ${seconds}s.`);
+    const wait = Math.ceil((CLICK_COOLDOWN_MS - (Date.now() - previous)) / 1000);
+    return failure(`Just refreshed — try again in ${wait}s.`);
   }
   lastRun.set(source, Date.now());
 
-  const outcome = await dispatch(source);
+  // `expire: 0` rather than the recommended "max". "max" is
+  // stale-while-revalidate: the next visitor still sees the old value while a
+  // fresh one loads behind it, which is the right default but the wrong
+  // behaviour for a button labelled "Refresh now" — it would look like nothing
+  // happened. The cooldown above is what keeps this from being impolite.
+  for (const tag of tags) revalidateTag(tag, { expire: 0 });
+
+  // The health probe caches its own summary, so a source refresh that left it
+  // alone would show the old row and read as a no-op.
+  if (source !== "HEALTH") revalidateTag("health-probe", { expire: 0 });
 
   revalidatePath("/health");
   revalidatePath("/");
 
-  if (outcome.status === "OK") {
-    return success({
-      message: `${outcome.itemCount} item(s) in ${outcome.durationMs}ms${outcome.note ? ` — ${outcome.note}` : ""}`,
-    });
-  }
-  if (outcome.status === "SKIPPED") return failure(outcome.reason);
-  return failure(outcome.error);
+  return success({ message: "Cleared — the next load will fetch it fresh." });
 }
