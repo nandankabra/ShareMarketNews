@@ -3,6 +3,15 @@ import { NextResponse } from "next/server";
 import { getNewsPulse } from "@/lib/services/briefing/queries";
 
 /**
+ * Vercel defaults server functions to ten seconds. On a cold cache this page
+ * fetches sequentially — one request in flight per host, at the politeness gap
+ * — which is comfortably more than that. Sixty is the Hobby ceiling, and the
+ * budgets in the data layer are sized against it.
+ */
+export const maxDuration = 60;
+
+
+/**
  * A deliberately tiny endpoint the briefing polls every thirty seconds.
  *
  * Returns one timestamp and a count — enough for the client to notice that

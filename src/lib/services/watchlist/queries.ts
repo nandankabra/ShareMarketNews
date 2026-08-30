@@ -1,7 +1,11 @@
 import "server-only";
 
-import { addDaysIst, istToday } from "@/lib/date/ist";
-import { prisma } from "@/lib/prisma";
+import { istToday } from "@/lib/date/ist";
+import { analyse } from "@/lib/live/analysis";
+import { resolveShare } from "@/lib/live/directory";
+import { liveDirectory, liveEvents, liveHistory } from "@/lib/live/sources";
+import type { Candle } from "@/lib/ta/types";
+import { readWatchlist } from "@/lib/watchlist/store";
 
 export type WatchlistRow = {
   shareId: string;
@@ -21,75 +25,65 @@ export type WatchlistRow = {
   nextEvent: { eventDate: string; type: string } | null;
 };
 
+/**
+ * The watchlist: a cookie of symbols, joined to live data.
+ *
+ * One history call per entry, which is affordable precisely because this list
+ * is yours and short — it is the one screen where fetching per row is the right
+ * shape. The bars carry the price, the sparkline and the RSI together, so a row
+ * costs one request rather than three.
+ */
 export async function listWatchlist(): Promise<WatchlistRow[]> {
-  const items = await prisma.watchlistItem.findMany({
-    orderBy: [{ sortIndex: "asc" }, { addedAt: "asc" }],
-    include: { share: true },
-  });
+  const entries = await readWatchlist();
+  if (entries.length === 0) return [];
 
-  if (items.length === 0) return [];
-
-  const shareIds = items.map((item) => item.shareId);
+  const events = await liveEvents();
   const today = istToday();
-  const horizon = addDaysIst(today, 30);
-  const since48h = new Date(Date.now() - 48 * 60 * 60_000);
-  const since30d = new Date(Date.now() - 30 * 86_400_000);
 
-  const [bars, newsCounts, events] = await Promise.all([
-    prisma.priceSnapshot.findMany({
-      where: { shareId: { in: shareIds }, interval: "DAILY", at: { gte: since30d } },
-      orderBy: { at: "asc" },
-      select: { shareId: true, close: true },
-    }),
-    prisma.shareNewsMention.groupBy({
-      by: ["shareId"],
-      where: { shareId: { in: shareIds }, article: { publishedAt: { gte: since48h } } },
-      _count: { _all: true },
-    }),
-    prisma.corporateEvent.findMany({
-      where: { shareId: { in: shareIds }, eventDate: { gte: today, lte: horizon } },
-      orderBy: { eventDate: "asc" },
-      select: { shareId: true, eventDate: true, type: true },
-    }),
-  ]);
+  const rows: WatchlistRow[] = [];
+  // Sequential: one request in flight per host, as everywhere else.
+  for (const entry of entries) {
+    const identity = await resolveShare(entry.symbol);
+    const history = await liveHistory(entry.symbol);
 
-  const sparkByShare = new Map<string, number[]>();
-  for (const bar of bars) {
-    const list = sparkByShare.get(bar.shareId) ?? [];
-    list.push(bar.close);
-    sparkByShare.set(bar.shareId, list);
-  }
+    const candles: Candle[] = history.ok
+      ? history.data.map((bar) => ({
+          t: new Date(`${bar.day}T00:00:00.000Z`).getTime(),
+          o: bar.open, h: bar.high, l: bar.low, c: bar.close, v: bar.volume,
+        }))
+      : [];
 
-  const newsByShare = new Map(newsCounts.map((row) => [row.shareId, row._count._all]));
-  const eventByShare = new Map<string, { eventDate: string; type: string }>();
-  for (const event of events) {
-    if (event.shareId && !eventByShare.has(event.shareId)) {
-      eventByShare.set(event.shareId, { eventDate: event.eventDate, type: event.type });
-    }
-  }
+    const ta = analyse(candles);
+    const lastBar = history.ok ? history.data.at(-1) : undefined;
 
-  return items.map((item) => {
-    const share = item.share;
-    return {
-      shareId: item.shareId,
-      symbol: share.symbol,
-      name: share.name,
-      note: item.note,
-      addedAt: item.addedAt,
-      addedPrice: item.addedPrice,
-      lastPrice: share.lastPrice,
-      dayChangePercent: share.dayChangePercent,
-      quotedAt: share.quotedAt,
-      rsi14: share.rsi14,
+    const nextEvent = (events.ok ? events.data : [])
+      .filter((event) => event.symbol.toUpperCase() === entry.symbol && event.eventDate >= today)
+      .sort((a, b) => a.eventDate.localeCompare(b.eventDate))[0];
+
+    rows.push({
+      shareId: entry.symbol,
+      symbol: entry.symbol,
+      name: identity.name,
+      note: entry.note,
+      addedAt: new Date(entry.addedAt),
+      addedPrice: entry.addedPrice,
+      lastPrice: ta.close,
+      dayChangePercent: ta.dayChangePercent,
+      quotedAt: lastBar ? new Date(`${lastBar.day}T00:00:00.000Z`) : null,
+      rsi14: ta.rsi14,
       sinceAddedPercent:
-        item.addedPrice && item.addedPrice > 0 && share.lastPrice != null
-          ? ((share.lastPrice - item.addedPrice) / item.addedPrice) * 100
+        entry.addedPrice && ta.close != null
+          ? ((ta.close - entry.addedPrice) / entry.addedPrice) * 100
           : null,
-      spark: sparkByShare.get(item.shareId) ?? [],
-      newsCount: newsByShare.get(item.shareId) ?? 0,
-      nextEvent: eventByShare.get(item.shareId) ?? null,
-    };
-  });
+      spark: candles.slice(-30).map((candle) => candle.c),
+      // A per-share news count would be one Google query per row. The share
+      // page carries the headlines; this column would cost more than it says.
+      newsCount: 0,
+      nextEvent: nextEvent ? { eventDate: nextEvent.eventDate, type: nextEvent.type } : null,
+    });
+  }
+
+  return rows;
 }
 
 export type SearchHitRow = {
@@ -101,43 +95,45 @@ export type SearchHitRow = {
 };
 
 /**
- * Search the shares already loaded from the index files first.
+ * Search by symbol or company name.
  *
- * Local-first rather than provider-first, and not only because the provider
- * keeps rate-limiting us: the universe already holds every constituent of every
- * tracked sector, which is what you are almost always reaching for. Going out
- * to the network for "TCS" would be slower and worse. The provider is the
- * fallback for a share outside the universe entirely.
+ * Backed by the BSE directory — one cached call covering roughly five thousand
+ * listed companies, which is a far larger universe than the sector index files
+ * ever held. Symbol prefix matches rank first, because typing "TCS" means the
+ * ticker, not the first company whose name happens to contain those letters.
  */
 export async function searchLocalShares(query: string, limit = 8): Promise<SearchHitRow[]> {
   const term = query.trim();
   if (term.length < 2) return [];
 
-  const shares = await prisma.share.findMany({
-    where: {
-      OR: [{ symbol: { contains: term } }, { name: { contains: term } }],
-    },
-    take: limit,
-    include: {
-      watchlist: { select: { id: true } },
-      memberships: { take: 1, include: { sector: { select: { displayName: true } } } },
-    },
-  });
+  const [directory, watched] = [await liveDirectory(), await readWatchlist()];
+  if (!directory.ok) return [];
 
   const upper = term.toUpperCase();
+  const lower = term.toLowerCase();
+  const inList = new Set(watched.map((entry) => entry.symbol));
 
-  return shares
-    .map((share) => ({
-      symbol: share.symbol,
-      name: share.name,
-      sector: share.memberships[0]?.sector.displayName ?? share.yahooSector ?? null,
-      tracked: true,
-      inWatchlist: share.watchlist != null,
-    }))
-    // An exact ticker match is what someone typing "TCS" means.
+  const matches = directory.data.filter((entry) => {
+    const id = entry.scripId?.toUpperCase() ?? "";
+    return id.includes(upper) || (entry.name?.toLowerCase().includes(lower) ?? false);
+  });
+
+  return matches
     .sort((a, b) => {
-      const aExact = a.symbol === upper ? 0 : a.symbol.startsWith(upper) ? 1 : 2;
-      const bExact = b.symbol === upper ? 0 : b.symbol.startsWith(upper) ? 1 : 2;
-      return aExact - bExact || a.symbol.localeCompare(b.symbol);
-    });
+      const aId = a.scripId?.toUpperCase() ?? "";
+      const bId = b.scripId?.toUpperCase() ?? "";
+      const aExact = aId === upper ? 0 : aId.startsWith(upper) ? 1 : 2;
+      const bExact = bId === upper ? 0 : bId.startsWith(upper) ? 1 : 2;
+      if (aExact !== bExact) return aExact - bExact;
+      return aId.localeCompare(bId);
+    })
+    .slice(0, limit)
+    .map((entry) => ({
+      symbol: entry.scripId?.toUpperCase() ?? "",
+      name: entry.name ?? entry.scripId ?? "",
+      sector: null,
+      tracked: true,
+      inWatchlist: inList.has(entry.scripId?.toUpperCase() ?? ""),
+    }))
+    .filter((hit) => hit.symbol.length > 0);
 }

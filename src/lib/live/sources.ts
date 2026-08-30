@@ -1,11 +1,13 @@
 import "server-only";
 
 import { parseNseDate } from "@/lib/date/ist";
+import { fetchScripMaster } from "@/lib/providers/bse";
 import { fetchNews } from "@/lib/providers/googlenews";
 import { fetchConstituents } from "@/lib/providers/niftyindices";
 import {
   fetchAllIndices,
   fetchEventCalendar,
+  fetchHistorical,
   fetchMarketStatus,
   fetchOptionChain,
   fetchOptionExpiries,
@@ -144,6 +146,38 @@ export const liveOptionChain = liveSource(
     return fetchOptionChain(symbol, expiryLabel, dayKey);
   },
   TTL.optionChain,
+);
+
+
+/**
+ * Daily OHLC — the input to every indicator, level and candle on the site.
+ *
+ * 420 calendar days is about 250 trading days, the window the support and
+ * resistance clustering is defined over.
+ */
+export const liveHistory = liveSource(
+  "history",
+  async (symbol: string) => fetchHistorical(symbol, 420),
+  TTL.candles,
+);
+
+/**
+ * The share directory: symbol to company name, ISIN and BSE quote code.
+ *
+ * This is what replaced the Share table. Without a database there is nothing
+ * that knows "TCS" is "Tata Consultancy Services Ltd" — and the news search
+ * needs the full name, because searching Google for "TCS" returns the wrong
+ * company on a good day. BSE publishes all of it in one call, and `scrip_id`
+ * happens to match the NSE symbol, which is what makes the join possible at
+ * all.
+ *
+ * One call for ~5000 companies, cached for a day. Fetching it per share would
+ * be absurd; fetching it once is cheaper than the sector CSVs it replaces.
+ */
+export const liveDirectory = liveSource(
+  "bse-directory",
+  async () => fetchScripMaster(),
+  TTL.constituents,
 );
 
 /** Re-exported so callers need only this module. */

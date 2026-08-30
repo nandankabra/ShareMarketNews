@@ -1,8 +1,12 @@
 import { addDaysIst, istToday } from "@/lib/date/ist";
-import { CATEGORY_LABEL } from "@/lib/news/classify";
+import { analyse } from "@/lib/live/analysis";
+import { resolveShare } from "@/lib/live/directory";
+import { liveEvents, liveHistory, liveNews } from "@/lib/live/sources";
+import { CATEGORY_LABEL, classifyHeadline } from "@/lib/news/classify";
+import { isRelevantHeadline } from "@/lib/news/relevance";
 import { isWatchlistOnly, scoreNotice, type NoticeResult } from "@/lib/notice/score";
-import { prisma } from "@/lib/prisma";
-import type { CorporateEventType } from "@/lib/db/enums";
+import type { Candle } from "@/lib/ta/types";
+import { readWatchlist } from "@/lib/watchlist/store";
 
 export type BriefingEntry = {
   notice: NoticeResult;
@@ -39,205 +43,208 @@ export type Briefing = {
 };
 
 /**
+ * How much one briefing render may spend upstream.
+ *
+ * The old version scored the whole universe, because the poller had already
+ * collected everything it needed and the scan was a database query. Now each
+ * candidate costs a request, so the candidate set has to be chosen before the
+ * work rather than filtered after it.
+ *
+ * Both numbers are sized against the function timeout on a cold cache: NSE is
+ * held to a 2s gap and Google News to 3s, so this is roughly 16s of bars and
+ * 12s of headlines. Warm, it is nearly free.
+ */
+const CANDIDATE_BUDGET = 8;
+const NEWS_BUDGET = 4;
+
+/**
  * Assemble the briefing.
  *
- * Deliberately not `server-only`. The guard belongs on the service layer that
- * pages import — it catches a module reaching a client bundle. This is the
- * reusable assembly underneath, and scripts (smoke-refresh) need to call it
- * without pretending to be a React render.
+ * Deliberately not `server-only`: the guard belongs on the service layer that
+ * pages import, and scripts need to call this without pretending to be a React
+ * render. The scorer itself is pure and lives in src/lib/notice/score.ts; this
+ * gathers its inputs.
  *
- * The scorer itself is pure and lives in src/lib/notice/score.ts; this is the
- * part that gathers its inputs. Only shares with something to say are
- * considered — a share with no event, no news and no unusual move cannot score,
- * so loading all four hundred to run the rule over them would be waste.
+ * Candidates are shares with a dated corporate event in the next three days,
+ * plus whatever is on your watchlist. That is the honest version of "only
+ * shares with something to say": a share with no event and no news cannot
+ * score, and without a database there is no way to notice an unusual move
+ * across four hundred shares without asking about all four hundred.
  */
 export async function getBriefing(): Promise<Briefing> {
   const today = istToday();
   const tomorrow = addDaysIst(today, 1);
   const dayAfter = addDaysIst(today, 2);
 
-  const now = Date.now();
-  const since24h = new Date(now - 24 * 60 * 60_000);
-  const since48h = new Date(now - 48 * 60 * 60_000);
+  const [events, watchlist] = [await liveEvents(), await readWatchlist()];
+  const watchedSymbols = new Set(watchlist.map((entry) => entry.symbol));
 
-  const [events, recentMentions, watchlist, eventSource] = await Promise.all([
-    prisma.corporateEvent.findMany({
-      where: { eventDate: { in: [today, tomorrow, dayAfter] }, shareId: { not: null } },
-      orderBy: { eventDate: "asc" },
-    }),
-    prisma.shareNewsMention.findMany({
-      where: { article: { publishedAt: { gte: since48h } } },
-      include: { article: true },
-      orderBy: { article: { publishedAt: "desc" } },
-    }),
-    prisma.watchlistItem.findMany({ select: { shareId: true } }),
-    prisma.sourceFetch.findUnique({ where: { source: "NSE_EVENT_CALENDAR" } }),
-  ]);
+  const upcoming = (events.ok ? events.data : []).filter(
+    (event) => event.eventDate >= today && event.eventDate <= dayAfter,
+  );
 
-  const watchlistIds = new Set(watchlist.map((item) => item.shareId));
-
-  // Candidates: anything with a dated event, any share in the news, anything
-  // watched. Everything else cannot score above zero.
-  const candidateIds = new Set<string>();
-  for (const event of events) if (event.shareId) candidateIds.add(event.shareId);
-  for (const mention of recentMentions) candidateIds.add(mention.shareId);
-  for (const id of watchlistIds) candidateIds.add(id);
-
-  // A share can also qualify on movement alone, but only where a baseline
-  // exists to call the move abnormal against.
-  const movers = await prisma.share.findMany({
-    where: {
-      dayChangePercent: { not: null },
-      avgAbsChangePercent20d: { not: null, gt: 0 },
-    },
-    select: { id: true, dayChangePercent: true, avgAbsChangePercent20d: true },
-  });
-  for (const mover of movers) {
-    if (Math.abs(mover.dayChangePercent!) >= mover.avgAbsChangePercent20d! * 2) {
-      candidateIds.add(mover.id);
-    }
-  }
-
-  if (candidateIds.size === 0) {
-    return {
-      today,
-      tomorrow,
-      happeningToday: [],
-      tomorrowEntries: [],
-      movingOrInNews: [],
-      fromWatchlist: [],
-      eventsAvailable: eventSource?.lastStatus === "OK",
-      scanned: 0,
-    };
-  }
-
-  const shares = await prisma.share.findMany({
-    where: { id: { in: [...candidateIds] } },
-    select: {
-      id: true, symbol: true, name: true, lastPrice: true, dayChangePercent: true,
-      quotedAt: true, rsi14: true, volume: true, avgVolume20d: true,
-      avgAbsChangePercent20d: true,
-    },
-  });
-
-  const eventsByShare = new Map<string, typeof events>();
-  for (const event of events) {
-    if (!event.shareId) continue;
-    const list = eventsByShare.get(event.shareId) ?? [];
-    list.push(event);
-    eventsByShare.set(event.shareId, list);
-  }
-
-  const mentionsByShare = new Map<string, typeof recentMentions>();
-  for (const mention of recentMentions) {
-    const list = mentionsByShare.get(mention.shareId) ?? [];
-    list.push(mention);
-    mentionsByShare.set(mention.shareId, list);
-  }
+  // Watchlist first: your own shares should never be crowded out of the budget
+  // by an unfamiliar company holding a board meeting.
+  const ordered: string[] = [
+    ...watchedSymbols,
+    ...upcoming.map((event) => event.symbol.toUpperCase()),
+  ];
+  const candidates = [...new Set(ordered)].slice(0, CANDIDATE_BUDGET);
 
   const entries: BriefingEntry[] = [];
+  let newsSpent = 0;
 
-  for (const share of shares) {
-    const shareEvents = eventsByShare.get(share.id) ?? [];
-    const shareMentions = mentionsByShare.get(share.id) ?? [];
+  for (const symbol of candidates) {
+    const identity = await resolveShare(symbol);
+    const history = await liveHistory(symbol);
 
-    const news24h = shareMentions.filter((mention) => mention.article.publishedAt >= since24h);
-    const news48h = shareMentions.filter((mention) => mention.article.publishedAt < since24h);
+    const candles: Candle[] = history.ok
+      ? history.data.map((bar) => ({
+          t: new Date(`${bar.day}T00:00:00.000Z`).getTime(),
+          o: bar.open, h: bar.high, l: bar.low, c: bar.close, v: bar.volume,
+        }))
+      : [];
+
+    const ta = analyse(candles);
+    const lastBar = history.ok ? history.data.at(-1) : undefined;
+
+    const shareEvents = upcoming
+      .filter((event) => event.symbol.toUpperCase() === symbol)
+      .map((event) => ({
+        eventDate: event.eventDate,
+        type: event.type,
+        description: event.description,
+      }));
+
+    // Headlines are the scarcest budget, so they go to shares that already have
+    // a reason to be here rather than being spread thinly over all of them.
+    let topStory: BriefingEntry["topStory"] = null;
+    let newsCount24h = 0;
+    let newsCount48h = 0;
+
+    if (newsSpent < NEWS_BUDGET) {
+      newsSpent += 1;
+      const news = await liveNews(identity.name);
+      if (news.ok) {
+        const relevant = news.data.filter((item) =>
+          isRelevantHeadline(item.title, identity.name, symbol),
+        );
+        const now = Date.now();
+        newsCount24h = relevant.filter((item) => now - item.publishedAt < 24 * 3_600_000).length;
+        newsCount48h = relevant.filter((item) => now - item.publishedAt < 48 * 3_600_000).length;
+
+        const newest = relevant[0];
+        if (newest) {
+          const classification = classifyHeadline(newest.title);
+          topStory = {
+            title: newest.title,
+            url: newest.url,
+            source: newest.source,
+            publishedAt: new Date(newest.publishedAt),
+            firstSeenAt: new Date(newest.publishedAt),
+            categoryLabel: CATEGORY_LABEL[classification.category],
+            polarity: classification.polarity,
+          };
+        }
+      }
+    }
 
     const notice = scoreNotice(
       {
-        symbol: share.symbol,
-        events: shareEvents.map((event) => ({
-          type: event.type as CorporateEventType,
-          eventDate: event.eventDate,
-          recordDate: event.recordDate,
-          description: event.description,
-        })),
-        newsCount24h: news24h.length,
-        newsCount48h: news48h.length,
-        dayChangePercent: share.dayChangePercent,
-        avgAbsChangePercent20d: share.avgAbsChangePercent20d,
-        volume: share.volume,
-        avgVolume20d: share.avgVolume20d,
-        inWatchlist: watchlistIds.has(share.id),
+        symbol,
+        events: shareEvents,
+        newsCount24h,
+        newsCount48h,
+        dayChangePercent: ta.dayChangePercent,
+        avgAbsChangePercent20d: ta.avgAbsChangePercent20d,
+        volume: lastBar?.volume ?? null,
+        avgVolume20d: ta.avgVolume20d,
+        inWatchlist: watchedSymbols.has(symbol),
       },
       today,
       tomorrow,
       dayAfter,
     );
 
+    // LOW is "nothing worth interrupting you for" — scored, then dropped.
     if (notice.band === "LOW") continue;
 
-    const top = shareMentions[0];
+    const nextEvent = upcoming
+      .filter((event) => event.symbol.toUpperCase() === symbol)
+      .sort((a, b) => a.eventDate.localeCompare(b.eventDate))[0];
+
     entries.push({
       notice,
       share: {
-        id: share.id,
-        symbol: share.symbol,
-        name: share.name,
-        lastPrice: share.lastPrice,
-        dayChangePercent: share.dayChangePercent,
-        quotedAt: share.quotedAt,
-        rsi14: share.rsi14,
+        id: symbol,
+        symbol,
+        name: identity.name,
+        lastPrice: ta.close,
+        dayChangePercent: ta.dayChangePercent,
+        quotedAt: lastBar ? new Date(`${lastBar.day}T00:00:00.000Z`) : null,
+        rsi14: ta.rsi14,
       },
-      topStory: top
-        ? {
-            title: top.article.title,
-            url: top.article.url,
-            source: top.article.source,
-            publishedAt: top.article.publishedAt,
-            firstSeenAt: top.article.firstSeenAt,
-            categoryLabel:
-              CATEGORY_LABEL[(top.article.category ?? "OTHER") as keyof typeof CATEGORY_LABEL] ?? "General",
-            polarity: top.article.polarity,
-          }
-        : null,
-      nextEvent: shareEvents[0]
-        ? {
-            eventDate: shareEvents[0].eventDate,
-            type: shareEvents[0].type,
-            description: shareEvents[0].description,
-          }
+      topStory,
+      nextEvent: nextEvent
+        ? { eventDate: nextEvent.eventDate, type: nextEvent.type, description: nextEvent.description }
         : null,
     });
   }
 
   entries.sort((a, b) => b.notice.score - a.notice.score);
 
-  // A share whose only reason is being watched goes in its own section, or the
-  // briefing fills up with things that are doing nothing.
   const watchlistOnly = entries.filter((entry) => isWatchlistOnly(entry.notice));
-  const rest = entries.filter((entry) => !isWatchlistOnly(entry.notice));
+  const scored = entries.filter((entry) => !isWatchlistOnly(entry.notice));
 
-  const happeningToday = rest.filter(
-    (entry) => entry.notice.eventDriven && entry.nextEvent?.eventDate === today,
+  const happeningToday = scored.filter((entry) => entry.nextEvent?.eventDate === today);
+  const tomorrowEntries = scored.filter((entry) => entry.nextEvent?.eventDate === tomorrow);
+  const rest = scored.filter(
+    (entry) => !happeningToday.includes(entry) && !tomorrowEntries.includes(entry),
   );
-  const tomorrowEntries = rest.filter(
-    (entry) => entry.notice.eventDriven && entry.nextEvent?.eventDate === tomorrow,
-  );
-  const claimed = new Set([...happeningToday, ...tomorrowEntries]);
-  const movingOrInNews = rest.filter((entry) => !claimed.has(entry));
 
   return {
     today,
     tomorrow,
     happeningToday,
     tomorrowEntries,
-    movingOrInNews,
+    movingOrInNews: rest,
     fromWatchlist: watchlistOnly,
-    eventsAvailable: eventSource?.lastStatus === "OK",
-    scanned: candidateIds.size,
+    eventsAvailable: events.ok,
+    scanned: candidates.length,
   };
 }
 
-/** Cheap payload for the live-news poll. */
-export async function getNewsPulse() {
-  const newest = await prisma.newsArticle.findFirst({
-    orderBy: { firstSeenAt: "desc" },
-    select: { firstSeenAt: true },
-  });
-  const count = await prisma.newsArticle.count({
-    where: { firstSeenAt: { gte: new Date(Date.now() - 30 * 60_000) } },
-  });
-  return { newestFirstSeenAt: newest?.firstSeenAt ?? null, freshCount: count };
+/**
+ * What the briefing polls for, every thirty seconds.
+ *
+ * "Fresh" is measured from a story's published time. With a database this
+ * compared against `firstSeenAt` — when *we* first saw it — which is the more
+ * honest definition of new-to-you and the one that let a marker decay
+ * gracefully. Nothing here can reconstruct that, so a story published three
+ * hours ago and discovered just now reads as three hours old.
+ *
+ * Scoped to the watchlist, which is the set you actually want interrupting you,
+ * and bounded so a poll never becomes a burst.
+ */
+export async function getNewsPulse(): Promise<{ newestFirstSeenAt: Date | null; freshCount: number }> {
+  const watchlist = (await readWatchlist()).slice(0, NEWS_BUDGET);
+  if (watchlist.length === 0) return { newestFirstSeenAt: null, freshCount: 0 };
+
+  const cutoff = Date.now() - 24 * 3_600_000;
+  let newest: number | null = null;
+  let fresh = 0;
+
+  for (const entry of watchlist) {
+    const identity = await resolveShare(entry.symbol);
+    const news = await liveNews(identity.name);
+    if (!news.ok) continue;
+
+    for (const item of news.data) {
+      if (!isRelevantHeadline(item.title, identity.name, entry.symbol)) continue;
+      if (item.publishedAt > cutoff) fresh += 1;
+      if (newest == null || item.publishedAt > newest) newest = item.publishedAt;
+    }
+  }
+
+  return { newestFirstSeenAt: newest != null ? new Date(newest) : null, freshCount: fresh };
 }

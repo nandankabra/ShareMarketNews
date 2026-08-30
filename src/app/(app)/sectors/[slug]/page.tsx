@@ -14,6 +14,15 @@ import { getMarketHeader } from "@/lib/services/market/queries";
 import { getSectorDetail } from "@/lib/services/sectors/queries";
 import { formatInr, relativeTime } from "@/lib/utils";
 
+/**
+ * Vercel defaults server functions to ten seconds. On a cold cache this page
+ * fetches sequentially — one request in flight per host, at the politeness gap
+ * — which is comfortably more than that. Sixty is the Hobby ceiling, and the
+ * budgets in the data layer are sized against it.
+ */
+export const maxDuration = 60;
+
+
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({

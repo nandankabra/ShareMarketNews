@@ -5,10 +5,10 @@ import { z } from "zod";
 
 import { failure, success, type ActionResult } from "@/lib/action-result";
 import { requireAccess } from "@/lib/actions/guard";
-import { prisma } from "@/lib/prisma";
-import { ProviderError } from "@/lib/providers/errors";
-import { fetchChart, searchShares } from "@/lib/providers/yahoo";
-import { toYahooSymbol } from "@/lib/providers/yahoo/symbol";
+import { analyse } from "@/lib/live/analysis";
+import { liveHistory } from "@/lib/live/sources";
+import type { Candle } from "@/lib/ta/types";
+import { readWatchlist, writeWatchlist } from "@/lib/watchlist/store";
 
 const symbolSchema = z
   .string()
@@ -22,14 +22,31 @@ function refresh(): void {
   revalidatePath("/");
 }
 
+/** The latest close, from the same bars the chart is drawn from. */
+async function currentPrice(symbol: string): Promise<number | null> {
+  const history = await liveHistory(symbol);
+  if (!history.ok) return null;
+
+  const candles: Candle[] = history.data.map((bar) => ({
+    t: new Date(`${bar.day}T00:00:00.000Z`).getTime(),
+    o: bar.open, h: bar.high, l: bar.low, c: bar.close, v: bar.volume,
+  }));
+
+  return analyse(candles).close;
+}
+
 /**
  * Add a share to the watchlist.
  *
  * `addedPrice` is stamped at the moment of adding, because that is what makes
  * the movement column mean "return since I noticed this" rather than "return
- * since a previous close I never chose". Where no quote is available the field
+ * since a previous close I never chose". Where no price is available the field
  * stays null and the column shows a dash — a fabricated entry price would make
  * every later number wrong.
+ *
+ * Adding also verifies the symbol exists, by requiring that NSE returns bars
+ * for it. That is the same check the share page makes, so a symbol that can be
+ * added is a symbol that has a page.
  */
 export async function addToWatchlist(rawSymbol: string): Promise<ActionResult<{ symbol: string }>> {
   const denied = await requireAccess();
@@ -39,64 +56,23 @@ export async function addToWatchlist(rawSymbol: string): Promise<ActionResult<{ 
   if (!parsed.success) return failure(parsed.error.issues[0]?.message ?? "Invalid symbol");
   const symbol = parsed.data;
 
-  let share = await prisma.share.findUnique({ where: { symbol } });
-
-  // Not in the tracked universe — ask the provider whether it exists at all.
-  if (!share) {
-    try {
-      const hits = await searchShares(symbol, 5);
-      const match =
-        hits.find((hit) => hit.nseSymbol === symbol) ??
-        hits.find((hit) => hit.nseSymbol.startsWith(symbol));
-
-      if (!match) return failure(`${symbol} is not a listed NSE equity we can find.`);
-
-      share = await prisma.share.create({
-        data: {
-          symbol: match.nseSymbol,
-          yahooSymbol: match.yahooSymbol,
-          name: match.name,
-          yahooSector: match.sector,
-          yahooIndustry: match.industry,
-        },
-      });
-    } catch (error) {
-      if (error instanceof ProviderError) {
-        return failure(
-          `Could not look up ${symbol} — the search provider is unavailable (${error.kind.toLowerCase()}). ` +
-            `Shares already in a tracked sector can still be added.`,
-        );
-      }
-      throw error;
-    }
+  const existing = await readWatchlist();
+  if (existing.some((entry) => entry.symbol === symbol)) {
+    return failure(`${symbol} is already on your watchlist.`);
+  }
+  if (existing.length >= 60) {
+    return failure("The watchlist is full — it is stored in a cookie, which caps at 60 entries.");
   }
 
-  const existing = await prisma.watchlistItem.findUnique({ where: { shareId: share.id } });
-  if (existing) return failure(`${symbol} is already on your watchlist.`);
-
-  // Prefer the cached quote; only reach for the network when there isn't one.
-  let addedPrice = share.lastPrice;
-  if (addedPrice == null) {
-    try {
-      const quote = await fetchChart(share.yahooSymbol ?? toYahooSymbol(symbol), "5d", "1d");
-      addedPrice = quote.lastPrice;
-      if (quote.lastPrice != null) {
-        await prisma.share.update({
-          where: { id: share.id },
-          data: { lastPrice: quote.lastPrice, previousClose: quote.previousClose, quotedAt: new Date() },
-        });
-      }
-    } catch {
-      // Adding must not fail because a price could not be fetched. The share
-      // goes on the list; the entry price fills in on the next poll.
-      addedPrice = null;
-    }
+  const history = await liveHistory(symbol);
+  if (!history.ok) {
+    return failure(`NSE has no daily data for ${symbol}. Check the symbol.`);
   }
 
-  const count = await prisma.watchlistItem.count();
-  await prisma.watchlistItem.create({
-    data: { shareId: share.id, addedPrice, sortIndex: count },
-  });
+  await writeWatchlist([
+    ...existing,
+    { symbol, note: null, addedPrice: await currentPrice(symbol), addedAt: Date.now() },
+  ]);
 
   refresh();
   return success({ symbol });
@@ -106,8 +82,11 @@ export async function removeFromWatchlist(shareId: string): Promise<ActionResult
   const denied = await requireAccess();
   if (denied) return denied;
 
-  const deleted = await prisma.watchlistItem.deleteMany({ where: { shareId } });
-  if (deleted.count === 0) return failure("That share was not on your watchlist.");
+  const existing = await readWatchlist();
+  const remaining = existing.filter((entry) => entry.symbol !== shareId.toUpperCase());
+  if (remaining.length === existing.length) return failure("That share was not on your watchlist.");
+
+  await writeWatchlist(remaining);
   refresh();
   return success();
 }
@@ -121,31 +100,43 @@ export async function updateWatchlistNote(shareId: string, rawNote: string): Pro
   const parsed = noteSchema.safeParse(rawNote);
   if (!parsed.success) return failure(parsed.error.issues[0]?.message ?? "Invalid note");
 
-  const updated = await prisma.watchlistItem.updateMany({
-    where: { shareId },
-    data: { note: parsed.data || null },
-  });
-  if (updated.count === 0) return failure("That share is not on your watchlist.");
+  const existing = await readWatchlist();
+  const symbol = shareId.toUpperCase();
+  if (!existing.some((entry) => entry.symbol === symbol)) {
+    return failure("That share is not on your watchlist.");
+  }
+
+  await writeWatchlist(
+    existing.map((entry) =>
+      entry.symbol === symbol ? { ...entry, note: parsed.data || null } : entry,
+    ),
+  );
 
   refresh();
   return success();
 }
 
 /**
- * Re-stamp the entry price to the current quote.
+ * Re-stamp the entry price to the current one.
  *
- * For the case where a share was added while quotes were unavailable, so the
+ * For the case where a share was added while its data was unavailable, so the
  * movement column has nothing to measure from.
  */
 export async function resetAddedPrice(shareId: string): Promise<ActionResult> {
   const denied = await requireAccess();
   if (denied) return denied;
 
-  const share = await prisma.share.findUnique({ where: { id: shareId } });
-  if (!share) return failure("Unknown share.");
-  if (share.lastPrice == null) return failure("No quote available to measure from yet.");
+  const symbol = shareId.toUpperCase();
+  const existing = await readWatchlist();
+  if (!existing.some((entry) => entry.symbol === symbol)) return failure("Unknown share.");
 
-  await prisma.watchlistItem.updateMany({ where: { shareId }, data: { addedPrice: share.lastPrice } });
+  const price = await currentPrice(symbol);
+  if (price == null) return failure("No price available to measure from yet.");
+
+  await writeWatchlist(
+    existing.map((entry) => (entry.symbol === symbol ? { ...entry, addedPrice: price } : entry)),
+  );
+
   refresh();
   return success();
 }

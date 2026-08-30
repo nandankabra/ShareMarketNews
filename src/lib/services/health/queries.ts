@@ -1,7 +1,6 @@
 import "server-only";
 
-import { SourceKey } from "@/lib/db/enums";
-import { prisma } from "@/lib/prisma";
+import { liveHealthProbe } from "@/lib/live/health";
 
 export type SourceHealth = {
   source: string;
@@ -16,68 +15,73 @@ export type SourceHealth = {
   nextEligibleAt: Date | null;
 };
 
-const LABELS: Record<string, string> = {
-  NSE_MARKET_STATUS: "Market open/closed",
-  NSE_ALL_INDICES: "Sector index levels",
-  NSE_EQUITY_MASTER: "Index groupings",
-  NSE_EVENT_CALENDAR: "Board meetings",
-  NSE_CORPORATE_ACTIONS: "Dividends & ex-dates",
-  NSE_OPTION_CHAIN: "Nifty option chain",
-  NIFTY_CONSTITUENTS: "Sector constituents",
-  YAHOO_QUOTES: "Share prices",
-  YAHOO_DAILY_BARS: "Daily bars & indicators",
-  BSE_QUOTES: "Fallback prices (BSE)",
-  YAHOO_SEARCH: "Share search",
-  GOOGLE_NEWS: "News headlines",
-};
-
+/**
+ * Which upstreams are answering, right now.
+ *
+ * This used to read the poller's bookkeeping: what it last tried, when it last
+ * succeeded, how many times in a row it had failed. There is no poller and no
+ * bookkeeping any more, so the page reports something more direct and, for
+ * diagnosis, more useful — it calls each upstream and says what happened.
+ *
+ * Cached like everything else, so opening the health page repeatedly does not
+ * become the thing that gets us rate limited.
+ */
 export async function listSourceHealth(): Promise<SourceHealth[]> {
-  const rows = await prisma.sourceFetch.findMany();
-  const bySource = new Map(rows.map((row) => [row.source, row]));
+  const probe = await liveHealthProbe();
+  const rows = probe.ok ? probe.data.rows : [];
+  const at = new Date(probe.at);
 
-  return SourceKey.values.map((source) => {
-    const row = bySource.get(source);
-    return {
-      source,
-      label: LABELS[source] ?? source,
-      lastAttemptAt: row?.lastAttemptAt ?? null,
-      lastSuccessAt: row?.lastSuccessAt ?? null,
-      lastStatus: row?.lastStatus ?? null,
-      lastError: row?.lastError ?? null,
-      itemCount: row?.itemCount ?? null,
-      durationMs: row?.durationMs ?? null,
-      consecutiveFailures: row?.consecutiveFailures ?? 0,
-      nextEligibleAt: row?.nextEligibleAt ?? null,
-    };
-  });
-}
-
-export async function getUniverseStats() {
-  const [sectors, shares, quoted, memberships, events, articles, mentions, chains, watchlist, oldestNews] =
-    await Promise.all([
-      prisma.sector.count(),
-      prisma.share.count(),
-      prisma.share.count({ where: { lastPrice: { not: null } } }),
-      prisma.sectorMembership.count(),
-      prisma.corporateEvent.count(),
-      prisma.newsArticle.count(),
-      prisma.shareNewsMention.count(),
-      prisma.optionChainSnapshot.count(),
-      prisma.watchlistItem.count(),
-      prisma.newsArticle.findFirst({ orderBy: { publishedAt: "asc" }, select: { publishedAt: true } }),
-    ]);
-
-  return { sectors, shares, quoted, memberships, events, articles, mentions, chains, watchlist, oldestNews: oldestNews?.publishedAt ?? null };
+  return rows.map((row) => ({
+    source: row.source,
+    label: row.label,
+    lastAttemptAt: at,
+    lastSuccessAt: row.ok ? at : null,
+    lastStatus: row.ok ? "OK" : "FAILED",
+    lastError: row.ok ? null : row.detail,
+    itemCount: row.itemCount,
+    durationMs: row.ms,
+    consecutiveFailures: row.ok ? 0 : 1,
+    nextEligibleAt: null,
+  }));
 }
 
 /**
- * Has a poller checked in recently? Market status is the cheapest task and the
- * most frequent, so its last attempt is the best proxy for "something is
- * running" — distinct from "the data is fresh", which the sources table shows.
+ * What the app can currently see.
+ *
+ * Counts of stored rows are gone with the tables that held them. What is
+ * meaningful now is how much each answering upstream returned, which is what
+ * the probe already measured.
+ */
+export async function getUniverseStats() {
+  const probe = await liveHealthProbe();
+  const rows = probe.ok ? probe.data.rows : [];
+  const by = (source: string) => rows.find((row) => row.source === source);
+
+  return {
+    sectors: 16,
+    shares: by("BSE_DIRECTORY")?.itemCount ?? 0,
+    quoted: by("BSE_DIRECTORY")?.itemCount ?? 0,
+    memberships: by("NIFTY_CONSTITUENTS")?.itemCount ?? 0,
+    events: by("NSE_EVENT_CALENDAR")?.itemCount ?? 0,
+    articles: by("GOOGLE_NEWS")?.itemCount ?? 0,
+    mentions: by("GOOGLE_NEWS")?.itemCount ?? 0,
+    chains: by("NSE_OPTION_CHAIN")?.itemCount ?? 0,
+    watchlist: 0,
+    oldestNews: null as Date | null,
+    working: rows.filter((row) => row.ok).length,
+    total: rows.length,
+  };
+}
+
+/**
+ * There is no poller to check in any more — the app fetches inside the request.
+ * "Running" now means the upstreams answered when last asked.
  */
 export async function getPollerStatus() {
-  const row = await prisma.sourceFetch.findUnique({ where: { source: "NSE_MARKET_STATUS" } });
-  const lastAttemptAt = row?.lastAttemptAt ?? null;
-  const running = lastAttemptAt != null && Date.now() - lastAttemptAt.getTime() < 5 * 60_000;
-  return { running, lastAttemptAt };
+  const probe = await liveHealthProbe();
+  const rows = probe.ok ? probe.data.rows : [];
+  return {
+    running: rows.length > 0 && rows.some((row) => row.ok),
+    lastAttemptAt: new Date(probe.at),
+  };
 }
