@@ -76,16 +76,16 @@ export type ConstituentRow = {
  * without a crumb, and NSE's own `equity-stockIndices` — which used to return a
  * whole index with prices in one response — was removed and now 404s.
  *
- * NSE is held to a 2s gap and answers in roughly 2.5s, so ten shares is about
- * twenty-five seconds on a cold cache. That has to fit inside the page's
- * 60s budget alongside the index levels and the market header, which is what
- * sets this number.
+ * NSE is held to a 2s gap and answers in roughly 2.5s. Ten shares measured 43s
+ * cold once the index levels, the market header and NSE's session handshake
+ * were counted — inside the 60s ceiling, but not by enough to survive an
+ * upstream having a slow day. Eight leaves real headroom.
  *
  * The rest of the table renders without a price rather than making the page
  * wait, and each quote is cached under its own key — so the shares a sector
  * page warms are already warm when you open one of them.
  */
-const QUOTE_BUDGET = 10;
+const QUOTE_BUDGET = 8;
 
 export async function getSectorDetail(key: string) {
   const sector = SECTOR_CATALOGUE.find((candidate) => candidate.key === key);

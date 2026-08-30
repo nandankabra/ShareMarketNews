@@ -40,6 +40,8 @@ See `docs/HOSTING.md` for the rate-limit rules. They are not advisory.
 - A wrong constituents filename returns a full HTML web page.
 - An expired NSE cookie returns a login page.
 - An unknown Yahoo symbol returns `{chart:{result:null}}`.
+- NSE's historical endpoint answers 503 on one path and JSON on another that
+  looks interchangeable with it.
 - Google News pads a thin feed with entirely unrelated stories.
 
 So status codes are close to worthless, and every response is validated by
@@ -53,17 +55,29 @@ providers/          fetch + a sibling pure parser, per upstream
   http.ts           politeFetch: one UA, hard deadline, retry policy
   rate-limit.ts     per-host serialized queue with floors
   circuit.ts        a 429 stops calls to that host entirely
-refresh/
-  tasks/*.ts        plain async functions over prisma + providers
-  run-task.ts       the only writer of SourceFetch; backoff and timeouts
-  schedule.ts       pure: dueTasks(now, marketOpen, rows)
+live/               the read path — no database behind any of it
+  cache.ts          liveSource(): cached, shared, never throws
+  sources.ts        one cached accessor per upstream
+  directory.ts      symbol to company name, via BSE's scrip master
+  analysis.ts       pure: every indicator, from one array of bars
+  health.ts         ask every upstream and report what happened
 ta/                 pure indicators over Candle[]
-news/               pure classification, relevance, historical reaction
+news/               pure classification and relevance
 notice/score.ts     pure: the today/tomorrow rule
 options/analytics   pure: PCR, max pain, OI buildup
 services/           server-only read models for the pages
-poller/main.ts      the loop; runs the same tasks the UI's actions do
+watchlist/store.ts  the watchlist, in a cookie
+
+refresh/, poller/   unused by the deployed app; kept for self-hosting
 ```
+
+The read path holds no state. A page calls a `liveSource()`, which returns a
+cached result or fetches one — so the same request serves every visitor inside
+its window, and a failure is cached too rather than re-hit on every render.
+
+`prisma/` and `poller/` still exist and still work if you want to run this
+against a database at home. Nothing the deployed app renders imports them, and
+`DATABASE_URL` is optional precisely so that stays true.
 
 Every file that touches the network only builds a URL, calls `politeFetch`, and
 hands the response text to a pure parser. That split is why every parser is

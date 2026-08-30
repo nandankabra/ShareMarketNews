@@ -87,8 +87,15 @@ export const TTL = {
   marketStatus: 120,
   /** All 139 index levels in one call — no reason to be eager. */
   indices: 180,
-  /** One share's quote and its bars come from the same Yahoo response. */
-  quote: 180,
+  /**
+   * Quotes are daily closes now, not ticks — so this is not precision, it is
+   * how often a sector page pays to warm ten of them.
+   *
+   * At 180s a sector page went cold every three minutes and the unlucky
+   * visitor waited forty seconds. The underlying bar changes once a day, so
+   * that was three minutes of freshness bought with a forty-second render.
+   */
+  quote: 900,
   /** Daily bars only change once a day; the intraday tail is what moves. */
   candles: 900,
   /** Google News is the politeness-sensitive one: 3s floor, big result sets. */
