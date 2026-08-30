@@ -12,8 +12,6 @@ import {
   fetchOptionChain,
   fetchOptionExpiries,
 } from "@/lib/providers/nse";
-import { fetchChart, type ChartRange } from "@/lib/providers/yahoo";
-import { toYahooSymbol } from "@/lib/providers/yahoo/symbol";
 
 import { liveSource, TTL, type Live } from "./cache";
 
@@ -81,24 +79,46 @@ export const liveEvents = liveSource("event-calendar", async () => fetchEventCal
  * quote — which is what makes on-the-fly technical analysis affordable without
  * a table of stored snapshots behind it.
  */
+/**
+ * A recent quote for one share, from NSE's daily bars.
+ *
+ * This called Yahoo's chart endpoint until the probe showed Yahoo refuses the
+ * deployment's address outright — every constituent price on every sector page
+ * rendered as a dash. NSE answers, so the quote comes from the tail of the same
+ * daily series the charts are drawn from.
+ *
+ * The consequence is worth being clear about, because the UI states it: these
+ * are *closes*, not live ticks. During market hours the newest bar is still
+ * yesterday's, so a price here can be a day old. Labelling that honestly is
+ * better than implying a tick we do not have.
+ *
+ * A short window on purpose — the full 420-day series is twenty times the
+ * payload, and a sector page asks for a dozen of these.
+ */
 export const liveQuote = liveSource(
   "quote",
-  async (symbol: string, range: ChartRange = "6mo"): Promise<LiveQuote> => {
-    const quote = await fetchChart(toYahooSymbol(symbol), range, "1d");
+  async (symbol: string): Promise<LiveQuote> => {
+    const bars = await fetchHistorical(symbol, 20);
+    const latest = bars.at(-1);
+    const previous = latest?.previousClose ?? bars.at(-2)?.close ?? null;
+
     return {
       symbol,
-      name: quote.name,
-      currency: quote.currency,
-      lastPrice: quote.lastPrice,
-      previousClose: quote.previousClose,
-      dayHigh: quote.dayHigh,
-      dayLow: quote.dayLow,
-      week52High: quote.week52High,
-      week52Low: quote.week52Low,
-      volume: quote.volume,
-      quotedAt: quote.quotedAt ? quote.quotedAt.getTime() : null,
-      bars: quote.bars.map((bar) => ({
-        at: bar.at.getTime(),
+      name: null,
+      currency: "INR",
+      lastPrice: latest?.close ?? null,
+      previousClose: previous,
+      dayHigh: latest?.high ?? null,
+      dayLow: latest?.low ?? null,
+      // A twenty-day window cannot see a 52-week range, and guessing one from
+      // it would be a fabrication. The share page computes these from the full
+      // series it already loads.
+      week52High: null,
+      week52Low: null,
+      volume: latest?.volume ?? null,
+      quotedAt: latest ? new Date(`${latest.day}T00:00:00.000Z`).getTime() : null,
+      bars: bars.map((bar) => ({
+        at: new Date(`${bar.day}T00:00:00.000Z`).getTime(),
         open: bar.open,
         high: bar.high,
         low: bar.low,

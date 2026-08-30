@@ -72,16 +72,20 @@ export type ConstituentRow = {
 /**
  * How many constituents may be quoted while rendering one sector page.
  *
- * Quotes are one upstream call each — there is no batch endpoint that answers
- * without a crumb, and NSE's own `equity-stockIndices`, which used to return a
- * whole index with prices in one response, has been removed and now 404s.
+ * A quote is one request per share. There is no batch endpoint that answers
+ * without a crumb, and NSE's own `equity-stockIndices` — which used to return a
+ * whole index with prices in one response — was removed and now 404s.
  *
- * At the 1200ms politeness floor, twelve is about fifteen seconds on a cold
- * cache and comfortably inside the function timeout. The rest of the table
- * renders without a price rather than making the page wait, and each quote is
- * cached independently, so a second visit finds the earlier ones already warm.
+ * NSE is held to a 2s gap and answers in roughly 2.5s, so ten shares is about
+ * twenty-five seconds on a cold cache. That has to fit inside the page's
+ * 60s budget alongside the index levels and the market header, which is what
+ * sets this number.
+ *
+ * The rest of the table renders without a price rather than making the page
+ * wait, and each quote is cached under its own key — so the shares a sector
+ * page warms are already warm when you open one of them.
  */
-const QUOTE_BUDGET = 12;
+const QUOTE_BUDGET = 10;
 
 export async function getSectorDetail(key: string) {
   const sector = SECTOR_CATALOGUE.find((candidate) => candidate.key === key);
@@ -103,7 +107,7 @@ export async function getSectorDetail(key: string) {
   for (const [position, member] of members.entries()) {
     let quote = null;
     if (position < QUOTE_BUDGET) {
-      const result = await liveQuote(member.symbol, "5d");
+      const result = await liveQuote(member.symbol);
       if (result.ok) quote = result.data;
     }
 
@@ -124,7 +128,7 @@ export async function getSectorDetail(key: string) {
       dayHigh: quote?.dayHigh ?? null,
       volume: quote?.volume ?? null,
       quotedAt: quote?.quotedAt ? new Date(quote.quotedAt) : null,
-      quoteSource: quote ? "YAHOO" : null,
+      quoteSource: quote ? "NSE" : null,
       rsi14: null,
       newsCount: 0,
       nextEvent: null,
