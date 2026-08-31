@@ -3,7 +3,7 @@ import "server-only";
 import { istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
-import { toIntradayCandles, type IntradayInterval } from "@/lib/live/intraday";
+import { applyLivePrice, toIntradayCandles, type IntradayInterval } from "@/lib/live/intraday";
 import { liveEvents, liveHistory, liveIntraday, liveNews } from "@/lib/live/sources";
 import { CATEGORY_LABEL, classifyHeadline } from "@/lib/news/classify";
 import { isRelevantHeadline } from "@/lib/news/relevance";
@@ -119,7 +119,17 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
   // watching — this is the half that moves.
   const intradaySeries = identity.scripCode ? await liveIntraday(identity.scripCode) : null;
   const session = intradaySeries?.ok ? intradaySeries.data : null;
-  const intraday = session ? toIntradayCandles(session.points, 5 satisfies IntradayInterval) : [];
+  // The same fold the live endpoint applies, so the first paint already shows
+  // the forming candle at the traded price rather than a bar that jumps the
+  // moment the first poll lands.
+  const intraday = session
+    ? applyLivePrice(
+        toIntradayCandles(session.points, 5 satisfies IntradayInterval),
+        session.lastPrice,
+        Date.now(),
+        5,
+      )
+    : [];
 
   // News and events are secondary: a share page with a chart and no headlines
   // is useful, one that fails because Google was slow is not.

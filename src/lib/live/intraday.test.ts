@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toIntradayCandles } from "./intraday";
+import { applyLivePrice, toIntradayCandles } from "./intraday";
 import type { IntradayPoint } from "@/lib/providers/bse/parse-intraday";
 
 /** 09:15:00 IST on an arbitrary day, as epoch ms. */
@@ -69,5 +69,49 @@ describe("toIntradayCandles", () => {
     const candles = toIntradayCandles(points, 5);
     expect(candles[0].l).toBe(90);
     expect(candles[1].h).toBe(130);
+  });
+});
+
+describe("applyLivePrice", () => {
+  const bars = () => toIntradayCandles([minute(0, 100), minute(1, 104), minute(2, 102)], 5);
+
+  it("stretches the forming candle to admit a higher price", () => {
+    const out = applyLivePrice(bars(), 107, OPEN + 3 * 60_000, 5);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ o: 100, h: 107, l: 100, c: 107 });
+  });
+
+  it("stretches it downward too", () => {
+    const out = applyLivePrice(bars(), 95, OPEN + 3 * 60_000, 5);
+    expect(out[0]).toMatchObject({ h: 104, l: 95, c: 95 });
+  });
+
+  it("moves the close without widening when the price is inside the range", () => {
+    const out = applyLivePrice(bars(), 101, OPEN + 3 * 60_000, 5);
+    expect(out[0]).toMatchObject({ o: 100, h: 104, l: 100, c: 101 });
+  });
+
+  it("opens a new candle when the price belongs to a later bucket", () => {
+    const out = applyLivePrice(bars(), 110, OPEN + 6 * 60_000, 5);
+    expect(out).toHaveLength(2);
+    expect(out[1]).toMatchObject({ o: 110, h: 110, l: 110, c: 110, v: null });
+    // The finished candle must not be altered by a price outside it.
+    expect(out[0]).toMatchObject({ h: 104, l: 100, c: 102 });
+  });
+
+  it("ignores a price older than the forming candle", () => {
+    const out = applyLivePrice(bars(), 999, OPEN - 10 * 60_000, 5);
+    expect(out).toEqual(bars());
+  });
+
+  it("ignores absent or nonsensical prices rather than drawing them", () => {
+    expect(applyLivePrice(bars(), null, OPEN + 3 * 60_000, 5)).toEqual(bars());
+    expect(applyLivePrice(bars(), 0, OPEN + 3 * 60_000, 5)).toEqual(bars());
+  });
+
+  it("starts a series from the live price when there are no bars yet", () => {
+    const out = applyLivePrice([], 250, OPEN, 5);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ t: OPEN, o: 250, c: 250 });
   });
 });

@@ -91,12 +91,13 @@ export const TTL = {
    * Quotes are daily closes now, not ticks — so this is not precision, it is
    * how often a sector page pays to warm ten of them.
    *
-   * The last traded price changes continuously, and this is what the number at
-   * the top of a share page is measuring. Thirty seconds is two calls a minute
-   * for a share however many people are watching it — the cache is shared, so
-   * the cost does not scale with viewers.
+   * The last traded price changes continuously, and it is what makes the
+   * forming candle move between minute points. Twenty seconds because this is
+   * the cheap endpoint — a few hundred bytes — and it is the one thing on the
+   * page that genuinely benefits from being asked often. Three calls a minute
+   * per share, shared across every viewer.
    */
-  quote: 30,
+  quote: 20,
   /** Daily bars only change once a day; the intraday tail is what moves. */
   candles: 900,
   /** Google News is the politeness-sensitive one: 3s floor, big result sets. */

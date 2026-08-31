@@ -64,6 +64,46 @@ export function toIntradayCandles(points: IntradayPoint[], minutes: number): Can
   return candles;
 }
 
+/**
+ * Fold the live traded price into the candle still forming.
+ *
+ * The series advances once a minute, but the last traded price moves
+ * continuously — so between minute points the newest candle would sit
+ * motionless while the number above it changed. That is the difference between
+ * a chart that updates and one that ticks: on a broker's screen the forming
+ * candle's close follows the price, and its high and low stretch to admit it.
+ *
+ * Only ever touches the final candle, and only when the price belongs to the
+ * bucket that candle covers. A price from a later bucket opens a new candle
+ * rather than stretching the old one across a boundary it does not belong in.
+ *
+ * Pure, so the behaviour is pinned by tests rather than by watching a market.
+ */
+export function applyLivePrice(
+  candles: Candle[],
+  price: number | null,
+  at: number,
+  minutes: number,
+): Candle[] {
+  if (price == null || !Number.isFinite(price) || price <= 0) return candles;
+
+  const bucketMs = minutes * 60_000;
+  const bucket = Math.floor(at / bucketMs) * bucketMs;
+  const last = candles.at(-1);
+
+  if (!last || bucket > last.t) {
+    // A new interval has begun and no point has landed in it yet.
+    return [...candles, { t: bucket, o: price, h: price, l: price, c: price, v: null }];
+  }
+
+  if (bucket < last.t) return candles;
+
+  return [
+    ...candles.slice(0, -1),
+    { ...last, h: Math.max(last.h, price), l: Math.min(last.l, price), c: price },
+  ];
+}
+
 /** Intervals offered in the UI. One minute is deliberately absent — see above. */
 export const INTRADAY_INTERVALS = [5, 15, 30, 60] as const;
 export type IntradayInterval = (typeof INTRADAY_INTERVALS)[number];

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { resolveShare } from "@/lib/live/directory";
-import { toIntradayCandles } from "@/lib/live/intraday";
-import { liveIntraday } from "@/lib/live/sources";
+import { applyLivePrice, toIntradayCandles } from "@/lib/live/intraday";
+import { liveIntraday, liveQuote } from "@/lib/live/sources";
 
 /**
  * The session for one share, and nothing else.
@@ -44,8 +44,20 @@ export async function GET(
     );
   }
 
-  const { points, lastPrice, previousClose, dayHigh, dayLow, asOf } = session.data;
-  const candles = toIntradayCandles(points, 5).map((candle) => ({
+  const { points, previousClose, asOf } = session.data;
+
+  // The traded price comes from the small quote endpoint rather than from this
+  // series. Both are cached, but that one is a few hundred bytes against ten
+  // kilobytes, so it can be refreshed far more often — which matters because
+  // the series only advances once a minute while the price does not.
+  const quote = await liveQuote(identity.scripCode);
+  const livePrice = quote.ok ? quote.data.lastPrice : null;
+  const lastPrice = livePrice ?? session.data.lastPrice;
+
+  const built = toIntradayCandles(points, 5);
+  // Fold the traded price into the candle still forming, so the chart ticks
+  // between minute points instead of standing still for up to a minute.
+  const candles = applyLivePrice(built, lastPrice, Date.now(), 5).map((candle) => ({
     time: Math.floor(candle.t / 1000),
     open: candle.o,
     high: candle.h,
@@ -53,6 +65,17 @@ export async function GET(
     close: candle.c,
     volume: candle.v,
   }));
+
+  // The session high and low must account for the live price too, or a new
+  // extreme would be visible on the chart but absent from the figures beside it.
+  const dayHigh =
+    lastPrice != null && session.data.dayHigh != null
+      ? Math.max(session.data.dayHigh, lastPrice)
+      : session.data.dayHigh;
+  const dayLow =
+    lastPrice != null && session.data.dayLow != null
+      ? Math.min(session.data.dayLow, lastPrice)
+      : session.data.dayLow;
 
   return NextResponse.json(
     {
