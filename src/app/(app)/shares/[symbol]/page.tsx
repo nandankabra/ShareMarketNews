@@ -98,11 +98,14 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
           </span>
         }
         actions={
-          <div className="text-right">
+          // The header wraps on a narrow screen, and once the price is on its
+          // own line under a left-aligned title, right-aligning it leaves it
+          // stranded. It aligns left until there is room to sit beside the title.
+          <div className="text-left sm:text-right">
             <div className="tabular font-mono text-3xl font-semibold tracking-tight">
               {share.lastPrice != null ? `₹${formatInr(share.lastPrice)}` : "—"}
             </div>
-            <div className="mt-1 flex items-center justify-end gap-2">
+            <div className="mt-1 flex items-center justify-start gap-2 sm:justify-end">
               {share.dayChangePercent != null ? (
                 <ChangePill percent={share.dayChangePercent} absolute={share.dayChange} />
               ) : null}
