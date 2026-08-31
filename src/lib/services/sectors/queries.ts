@@ -1,6 +1,6 @@
 import "server-only";
 
-import { liveConstituents, liveIndices, liveQuote } from "@/lib/live/sources";
+import { liveConstituents, liveDirectory, liveIndices, liveQuote } from "@/lib/live/sources";
 import { SECTOR_CATALOGUE } from "@/lib/sectors/catalogue";
 
 export type SectorSummary = {
@@ -76,10 +76,10 @@ export type ConstituentRow = {
  * without a crumb, and NSE's own `equity-stockIndices` — which used to return a
  * whole index with prices in one response — was removed and now 404s.
  *
- * NSE is held to a 2s gap and answers in roughly 2.5s. Ten shares measured 43s
- * cold once the index levels, the market header and NSE's session handshake
- * were counted — inside the 60s ceiling, but not by enough to survive an
- * upstream having a slow day. Eight leaves real headroom.
+ * Quotes come from BSE now, which is held to a 1.5s gap and answers in about
+ * 0.3s — cheaper than the NSE daily-bar call this replaced, and live rather
+ * than yesterday's close. Eight is roughly fifteen seconds cold, well inside
+ * the page's 60s budget.
  *
  * The rest of the table renders without a price rather than making the page
  * wait, and each quote is cached under its own key — so the shares a sector
@@ -101,13 +101,31 @@ export async function getSectorDetail(key: string) {
 
   const members = constituents?.ok ? constituents.data : [];
 
+  // Quotes are keyed by BSE scrip code, so the directory has to answer "what is
+  // TCS on BSE" first. Matched on ISIN rather than on the ticker: both
+  // exchanges carry the same ISIN by definition, whereas the two ticker spaces
+  // agree only most of the time.
+  const directory = await liveDirectory();
+  const byIsin = new Map<string, string>();
+  const byTicker = new Map<string, string>();
+  if (directory.ok) {
+    for (const entry of directory.data) {
+      if (entry.isin) byIsin.set(entry.isin.toUpperCase(), entry.scripCode);
+      if (entry.scripId) byTicker.set(entry.scripId.toUpperCase(), entry.scripCode);
+    }
+  }
+
   // Sequential, never Promise.all: one request in flight per host is the whole
   // politeness story, and it is not negotiable for a convenience like this.
   const rows: ConstituentRow[] = [];
   for (const [position, member] of members.entries()) {
     let quote = null;
-    if (position < QUOTE_BUDGET) {
-      const result = await liveQuote(member.symbol);
+    const scripCode =
+      (member.isin ? byIsin.get(member.isin.toUpperCase()) : undefined) ??
+      byTicker.get(member.symbol.toUpperCase());
+
+    if (position < QUOTE_BUDGET && scripCode) {
+      const result = await liveQuote(scripCode);
       if (result.ok) quote = result.data;
     }
 
@@ -128,7 +146,7 @@ export async function getSectorDetail(key: string) {
       dayHigh: quote?.dayHigh ?? null,
       volume: quote?.volume ?? null,
       quotedAt: quote?.quotedAt ? new Date(quote.quotedAt) : null,
-      quoteSource: quote ? "NSE" : null,
+      quoteSource: quote ? "BSE" : null,
       rsi14: null,
       newsCount: 0,
       nextEvent: null,

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { parseNseDate } from "@/lib/date/ist";
-import { fetchScripMaster } from "@/lib/providers/bse";
+import { fetchBseIntraday, fetchBseQuote, fetchScripMaster } from "@/lib/providers/bse";
 import { fetchNews } from "@/lib/providers/googlenews";
 import { fetchConstituents } from "@/lib/providers/niftyindices";
 import {
@@ -80,51 +80,38 @@ export const liveEvents = liveSource("event-calendar", async () => fetchEventCal
  * a table of stored snapshots behind it.
  */
 /**
- * A recent quote for one share, from NSE's daily bars.
+ * A live quote for one share.
  *
- * This called Yahoo's chart endpoint until the probe showed Yahoo refuses the
- * deployment's address outright — every constituent price on every sector page
- * rendered as a dash. NSE answers, so the quote comes from the tail of the same
- * daily series the charts are drawn from.
+ * Keyed by BSE scrip code rather than symbol, because that is what the endpoint
+ * takes and what makes the cache entry unambiguous.
  *
- * The consequence is worth being clear about, because the UI states it: these
- * are *closes*, not live ticks. During market hours the newest bar is still
- * yesterday's, so a price here can be a day old. Labelling that honestly is
- * better than implying a tick we do not have.
+ * This replaced a quote derived from NSE's daily bars, which had one fatal
+ * property for a screen you actually watch: the newest daily bar is yesterday's
+ * close until the session ends, so every price in every table was a day old
+ * during exactly the hours you would be looking. This is the last traded price.
  *
- * A short window on purpose — the full 420-day series is twenty times the
- * payload, and a sector page asks for a dozen of these.
+ * It is also cheaper — a small JSON object against twenty days of OHLC — at the
+ * cost of the volume field, which this endpoint does not carry.
  */
 export const liveQuote = liveSource(
   "quote",
-  async (symbol: string): Promise<LiveQuote> => {
-    const bars = await fetchHistorical(symbol, 20);
-    const latest = bars.at(-1);
-    const previous = latest?.previousClose ?? bars.at(-2)?.close ?? null;
-
+  async (scripCode: string): Promise<LiveQuote> => {
+    const quote = await fetchBseQuote(scripCode);
     return {
-      symbol,
-      name: null,
+      symbol: scripCode,
+      name: quote.name,
       currency: "INR",
-      lastPrice: latest?.close ?? null,
-      previousClose: previous,
-      dayHigh: latest?.high ?? null,
-      dayLow: latest?.low ?? null,
-      // A twenty-day window cannot see a 52-week range, and guessing one from
-      // it would be a fabrication. The share page computes these from the full
-      // series it already loads.
+      lastPrice: quote.lastPrice,
+      previousClose: quote.previousClose,
+      dayHigh: quote.dayHigh,
+      dayLow: quote.dayLow,
+      // Neither the 52-week range nor volume is on this endpoint. Null rather
+      // than inferred: a made-up range would quietly corrupt the position bar.
       week52High: null,
       week52Low: null,
-      volume: latest?.volume ?? null,
-      quotedAt: latest ? new Date(`${latest.day}T00:00:00.000Z`).getTime() : null,
-      bars: bars.map((bar) => ({
-        at: new Date(`${bar.day}T00:00:00.000Z`).getTime(),
-        open: bar.open,
-        high: bar.high,
-        low: bar.low,
-        close: bar.close,
-        volume: bar.volume,
-      })),
+      volume: null,
+      quotedAt: Date.now(),
+      bars: [],
     };
   },
   TTL.quote,
@@ -198,6 +185,22 @@ export const liveDirectory = liveSource(
   "bse-directory",
   async () => fetchScripMaster(),
   TTL.constituents,
+);
+
+/**
+ * Today's session, a minute at a time — the live half of the app.
+ *
+ * Sixty seconds because that is exactly how often the upstream advances; a
+ * shorter window would re-fetch the same series and a longer one would make a
+ * "live" chart visibly lag its own clock.
+ *
+ * Cached like everything else, so a hundred people watching the same share cost
+ * one request a minute between them rather than one each.
+ */
+export const liveIntraday = liveSource(
+  "intraday",
+  async (scripCode: string) => fetchBseIntraday(scripCode),
+  TTL.intraday,
 );
 
 /** Re-exported so callers need only this module. */

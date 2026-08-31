@@ -1,6 +1,6 @@
 import "server-only";
 
-import { fetchScripMaster } from "@/lib/providers/bse";
+import { fetchBseIntraday, fetchScripMaster } from "@/lib/providers/bse";
 import { fetchNews } from "@/lib/providers/googlenews";
 import { fetchConstituents } from "@/lib/providers/niftyindices";
 import {
@@ -106,6 +106,19 @@ export const liveHealthProbe = liveSource(
       await probe("GOOGLE_NEWS", "Company news", "news.google.com", async () => {
         const items = await fetchNews("Tata Consultancy Services", "2d");
         return { count: items.length, detail: `${items.length} items` };
+      }),
+    );
+
+    rows.push(
+      await probe("BSE_INTRADAY", "Live prices & intraday chart", "bseindia.com", async () => {
+        // 532540 = TCS. The only intraday source that answers: NSE's
+        // quote-equity returns 403 to non-browser clients and its
+        // chart-databyindex returns an empty series even mid-session.
+        const session = await fetchBseIntraday("532540");
+        return {
+          count: session.points.length,
+          detail: `${session.points.length} pts, last ${session.lastPrice ?? "?"} at ${session.asOf ?? "?"}`,
+        };
       }),
     );
 

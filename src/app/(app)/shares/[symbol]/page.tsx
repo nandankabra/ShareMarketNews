@@ -7,11 +7,13 @@ import { PageHeader, PageShell } from "@/components/layout/page-header";
 import { ChangePill } from "@/components/market/change-pill";
 import { DayRangeBar } from "@/components/market/day-range-bar";
 import { CandleChart } from "@/components/shares/candle-chart";
+import { LiveRefresher } from "@/components/market/live-refresher";
 import { NewsList } from "@/components/shares/news-list";
 import { ReactionPanel } from "@/components/shares/reaction-panel";
 import { SignalList } from "@/components/shares/signal-list";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { isLikelyMarketOpen } from "@/lib/date/ist";
 import { serverNow } from "@/lib/server-now";
 import { getShareDetail } from "@/lib/services/shares/queries";
 import type { Level } from "@/lib/ta/levels";
@@ -50,6 +52,10 @@ function nearest(levels: Level[] | undefined, spot: number | null, side: "SUPPOR
 export default async function SharePage({ params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params;
   const [share, now] = await Promise.all([getShareDetail(symbol), serverNow()]);
+  // Whether to call the chart "live" and keep refreshing it. The intraday feed
+  // still returns the last session after hours, which is worth showing but is
+  // not live — labelling a frozen chart LIVE would be the app lying quietly.
+  const marketOpen = isLikelyMarketOpen(new Date(now));
 
   if (!share) notFound();
 
@@ -135,15 +141,24 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
       <div className="grid gap-3 lg:grid-cols-[1.6fr_1fr]">
         <Card className="p-4">
           <div className="mb-1 flex items-baseline justify-between gap-3">
-            <h2 className="text-muted-foreground font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
-              Candles · daily
+            <h2 className="text-muted-foreground flex items-center gap-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
+              Candles
+              {share.intraday.length > 0 && marketOpen ? (
+                <span className="text-up flex items-center gap-1 normal-case">
+                  <span className="bg-up size-1.5 animate-pulse rounded-full" aria-hidden />
+                  LIVE
+                </span>
+              ) : null}
             </h2>
             <span className="text-muted-foreground font-mono text-[10px]">
-              {share.candles.length} bars
+              {share.intraday.length > 0
+                ? `${share.intraday.length} × 5-min${share.liveAsOf ? ` · ${share.liveAsOf}` : ""}`
+                : `${share.candles.length} bars`}
               {share.taAt ? ` · indicators ${relativeTime(share.taAt, new Date(now))}` : ""}
             </span>
           </div>
-          <CandleChart candles={share.candles} levels={share.levels} />
+          <CandleChart candles={share.candles} intraday={share.intraday} levels={share.levels} />
+          {marketOpen && share.intraday.length > 0 ? <LiveRefresher /> : null}
         </Card>
 
         <div className="flex flex-col gap-3">

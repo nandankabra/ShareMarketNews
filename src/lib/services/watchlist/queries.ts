@@ -3,7 +3,7 @@ import "server-only";
 import { istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
-import { liveDirectory, liveEvents, liveHistory } from "@/lib/live/sources";
+import { liveDirectory, liveEvents, liveHistory, liveQuote } from "@/lib/live/sources";
 import type { Candle } from "@/lib/ta/types";
 import { readWatchlist } from "@/lib/watchlist/store";
 
@@ -56,6 +56,18 @@ export async function listWatchlist(): Promise<WatchlistRow[]> {
     const ta = analyse(candles);
     const lastBar = history.ok ? history.data.at(-1) : undefined;
 
+    // The bars give the sparkline, the RSI and the baseline; the live quote
+    // gives today's number. Without it every row showed yesterday's close
+    // during exactly the hours you would be watching.
+    const quote = identity.scripCode ? await liveQuote(identity.scripCode) : null;
+    const live = quote?.ok ? quote.data : null;
+    const lastPrice = live?.lastPrice ?? ta.close;
+    const previousClose = live?.previousClose ?? ta.previousClose;
+    const dayChangePercent =
+      live?.lastPrice != null && previousClose
+        ? ((live.lastPrice - previousClose) / previousClose) * 100
+        : ta.dayChangePercent;
+
     const nextEvent = (events.ok ? events.data : [])
       .filter((event) => event.symbol.toUpperCase() === entry.symbol && event.eventDate >= today)
       .sort((a, b) => a.eventDate.localeCompare(b.eventDate))[0];
@@ -67,13 +79,13 @@ export async function listWatchlist(): Promise<WatchlistRow[]> {
       note: entry.note,
       addedAt: new Date(entry.addedAt),
       addedPrice: entry.addedPrice,
-      lastPrice: ta.close,
-      dayChangePercent: ta.dayChangePercent,
-      quotedAt: lastBar ? new Date(`${lastBar.day}T00:00:00.000Z`) : null,
+      lastPrice,
+      dayChangePercent,
+      quotedAt: live ? new Date(quote!.at) : lastBar ? new Date(`${lastBar.day}T00:00:00.000Z`) : null,
       rsi14: ta.rsi14,
       sinceAddedPercent:
-        entry.addedPrice && ta.close != null
-          ? ((ta.close - entry.addedPrice) / entry.addedPrice) * 100
+        entry.addedPrice && lastPrice != null
+          ? ((lastPrice - entry.addedPrice) / entry.addedPrice) * 100
           : null,
       spark: candles.slice(-30).map((candle) => candle.c),
       // A per-share news count would be one Google query per row. The share

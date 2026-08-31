@@ -13,11 +13,13 @@ import {
 } from "lightweight-charts";
 import { useTheme } from "next-themes";
 
-import type { ShareCandle } from "@/lib/services/shares/queries";
+import type { IntradayCandle, ShareCandle } from "@/lib/services/shares/queries";
 import type { LevelSet } from "@/lib/ta/levels";
 import { cn } from "@/lib/utils";
 
 const RANGES = [
+  /** Today's session. Only offered when there is a session to show. */
+  { key: "1D", days: 0 },
   { key: "1M", days: 22 },
   { key: "3M", days: 66 },
   { key: "6M", days: 132 },
@@ -43,24 +45,46 @@ function toTime(day: string): UTCTimestamp {
   return (Date.parse(`${day}T00:00:00Z`) / 1000) as UTCTimestamp;
 }
 
+/** Daily and intraday bars differ only in how their time is expressed. */
+type Bar = { time: UTCTimestamp; open: number; high: number; low: number; close: number; volume: number | null };
+
 export function CandleChart({
   candles,
+  intraday = [],
   levels,
   className,
 }: {
   candles: ShareCandle[];
+  intraday?: IntradayCandle[];
   levels: LevelSet | null;
   className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [range, setRange] = useState<RangeKey>("3M");
+  const hasSession = intraday.length > 0;
+  // Opening on the live session when there is one is the whole point; outside
+  // market hours there is nothing to show, so it falls back to three months.
+  const [range, setRange] = useState<RangeKey>(hasSession ? "1D" : "3M");
   const { resolvedTheme } = useTheme();
 
-  const visible = useMemo(() => {
+  const ranges = useMemo(() => RANGES.filter((entry) => entry.key !== "1D" || hasSession), [hasSession]);
+  const isIntraday = range === "1D" && hasSession;
+
+  const visible = useMemo<Bar[]>(() => {
+    if (range === "1D" && intraday.length > 0) {
+      return intraday.map((candle) => ({
+        time: candle.time as UTCTimestamp,
+        open: candle.open, high: candle.high, low: candle.low, close: candle.close, volume: candle.volume,
+      }));
+    }
+
     const days = RANGES.find((entry) => entry.key === range)?.days ?? 66;
-    return Number.isFinite(days) ? candles.slice(-days) : candles;
-  }, [candles, range]);
+    const slice = Number.isFinite(days) && days > 0 ? candles.slice(-days) : candles;
+    return slice.map((candle) => ({
+      time: toTime(candle.time),
+      open: candle.open, high: candle.high, low: candle.low, close: candle.close, volume: candle.volume,
+    }));
+  }, [candles, intraday, range]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -83,7 +107,8 @@ export function CandleChart({
       },
       grid: { vertLines: { color: grid }, horzLines: { color: grid } },
       rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.28 } },
-      timeScale: { borderVisible: false, timeVisible: false },
+      // Intraday bars need a clock on the axis; daily bars only need a date.
+      timeScale: { borderVisible: false, timeVisible: isIntraday, secondsVisible: false },
       crosshair: { mode: 1 },
       handleScale: { axisPressedMouseMove: { time: true, price: false } },
       autoSize: true,
@@ -100,7 +125,7 @@ export function CandleChart({
     });
     candleSeries.setData(
       visible.map((candle) => ({
-        time: toTime(candle.time),
+        time: candle.time,
         open: candle.open,
         high: candle.high,
         low: candle.low,
@@ -117,17 +142,26 @@ export function CandleChart({
     chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
     volumeSeries.setData(
       visible.map((candle) => ({
-        time: toTime(candle.time),
+        time: candle.time,
         value: candle.volume ?? 0,
         color: candle.close >= candle.open ? `${up}55` : `${down}55`,
       })),
     );
 
     const closes = visible.map((candle) => candle.close);
-    const overlays: Array<{ period: number; color: string; width: 1 | 2 }> = [
-      { period: 20, color: accent, width: 2 },
-      { period: 50, color: dark ? "#7FA3C4" : "#5B7A99", width: 1 },
-    ];
+    // A 20-session average over five-minute bars would span a day and a half of
+    // trading and say nothing about today, so the intraday chart uses periods
+    // scaled to its own bars: 9 and 21 five-minute candles, a little under an
+    // hour and just under two.
+    const overlays: Array<{ period: number; color: string; width: 1 | 2 }> = isIntraday
+      ? [
+          { period: 9, color: accent, width: 2 },
+          { period: 21, color: dark ? "#7FA3C4" : "#5B7A99", width: 1 },
+        ]
+      : [
+          { period: 20, color: accent, width: 2 },
+          { period: 50, color: dark ? "#7FA3C4" : "#5B7A99", width: 1 },
+        ];
 
     for (const overlay of overlays) {
       // Only draw an average the visible window can actually support.
@@ -142,7 +176,7 @@ export function CandleChart({
       const values = smaSeries(closes, overlay.period);
       series.setData(
         visible
-          .map((candle, index) => ({ time: toTime(candle.time), value: values[index] }))
+          .map((candle, index) => ({ time: candle.time, value: values[index] }))
           .filter((point): point is { time: UTCTimestamp; value: number } => point.value != null),
       );
     }
@@ -179,12 +213,12 @@ export function CandleChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [visible, levels, resolvedTheme]);
+  }, [visible, levels, resolvedTheme, isIntraday]);
 
   if (candles.length === 0) {
     return (
       <div className={cn("text-muted-foreground flex h-[240px] items-center justify-center rounded-md border border-dashed text-sm sm:h-[320px]", className)}>
-        No daily bars yet — they arrive with the post-close snapshot.
+        No bars to draw — NSE returned no daily history for this symbol.
       </div>
     );
   }
@@ -194,10 +228,10 @@ export function CandleChart({
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] tracking-wide">
           <span className="text-muted-foreground flex items-center gap-1.5">
-            <i className="bg-primary block h-0.5 w-3 rounded-full" aria-hidden /> SMA 20
+            <i className="bg-primary block h-0.5 w-3 rounded-full" aria-hidden /> SMA {isIntraday ? 9 : 20}
           </span>
           <span className="text-muted-foreground flex items-center gap-1.5">
-            <i className="block h-0.5 w-3 rounded-full bg-[#5B7A99] dark:bg-[#7FA3C4]" aria-hidden /> SMA 50
+            <i className="block h-0.5 w-3 rounded-full bg-[#5B7A99] dark:bg-[#7FA3C4]" aria-hidden /> SMA {isIntraday ? 21 : 50}
           </span>
           <span className="text-muted-foreground flex items-center gap-1.5">
             <i className="bg-down block h-0.5 w-3 rounded-full" aria-hidden /> Resistance
@@ -207,7 +241,7 @@ export function CandleChart({
           </span>
         </div>
         <div className="flex gap-0.5">
-          {RANGES.map((entry) => (
+          {ranges.map((entry) => (
             <button
               key={entry.key}
               type="button"

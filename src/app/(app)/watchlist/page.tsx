@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { PageHeader, PageShell } from "@/components/layout/page-header";
+import { LiveRefresher } from "@/components/market/live-refresher";
 import { StaleBanner } from "@/components/market/stale-banner";
 import { EmptyState } from "@/components/states";
 import { AddShare } from "@/components/watchlist/add-share";
@@ -39,6 +40,7 @@ export default async function WatchlistPage() {
       />
 
       <StaleBanner lastSuccessAt={header.quotesLastSuccessAt} now={now} />
+      {header.isOpen ? <LiveRefresher /> : null}
 
       {rows.length === 0 ? (
         <EmptyState

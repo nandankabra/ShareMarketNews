@@ -1,6 +1,7 @@
 import { politeFetch } from "../http";
 
 import { parseBseHighLow, parseBseQuote, type BseHighLow, type BseQuote } from "./parse-quote";
+import { parseBseIntraday, type IntradaySeries } from "./parse-intraday";
 import { parseScripMaster, type ScripEntry } from "./parse-scrip-master";
 
 /**
@@ -48,4 +49,21 @@ export async function fetchBseHighLow(scripCode: string): Promise<BseHighLow> {
   return parseBseHighLow(response.text);
 }
 
-export type { BseHighLow, BseQuote, ScripEntry };
+/**
+ * Today's price path, a minute at a time.
+ *
+ * `flag=0` is the current session. This is the only intraday source that
+ * answers: NSE's `quote-equity` returns 403 to any non-browser client, and its
+ * `chart-databyindex` returns an empty series even during market hours with a
+ * valid cookie.
+ */
+export async function fetchBseIntraday(scripCode: string): Promise<IntradaySeries> {
+  const response = await politeFetch(
+    "https://api.bseindia.com/BseIndiaAPI/api/StockReachGraph/w" +
+      `?scripcode=${encodeURIComponent(scripCode)}&flag=0&fromdate=&todate=&seriesid=`,
+    { source: "BSE_QUOTES", referer: REFERER, accept: "application/json" },
+  );
+  return parseBseIntraday(response.text, scripCode);
+}
+
+export type { BseHighLow, BseQuote, IntradaySeries, ScripEntry };

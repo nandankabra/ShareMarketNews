@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 
 import { PageHeader, PageShell } from "@/components/layout/page-header";
 import { ChangePill } from "@/components/market/change-pill";
+import { LiveRefresher } from "@/components/market/live-refresher";
 import { StaleBanner } from "@/components/market/stale-banner";
 import { ConstituentsTable } from "@/components/sectors/constituents-table";
 import { EmptyState } from "@/components/states";
@@ -83,6 +84,7 @@ export default async function SectorDetailPage({ params }: { params: Promise<{ s
       />
 
       <StaleBanner lastSuccessAt={header.quotesLastSuccessAt} now={now} />
+      {header.isOpen ? <LiveRefresher /> : null}
 
       {sector.rows.length === 0 ? (
         <EmptyState

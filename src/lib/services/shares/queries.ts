@@ -3,7 +3,8 @@ import "server-only";
 import { istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
-import { liveEvents, liveHistory, liveNews } from "@/lib/live/sources";
+import { toIntradayCandles, type IntradayInterval } from "@/lib/live/intraday";
+import { liveEvents, liveHistory, liveIntraday, liveNews } from "@/lib/live/sources";
 import { CATEGORY_LABEL, classifyHeadline } from "@/lib/news/classify";
 import { isRelevantHeadline } from "@/lib/news/relevance";
 import { summariseReaction, type Reaction } from "@/lib/news/reaction";
@@ -13,6 +14,9 @@ import type { Candle } from "@/lib/ta/types";
 import { isWatched } from "@/lib/watchlist/store";
 
 export type ShareCandle = { time: string; open: number; high: number; low: number; close: number; volume: number | null };
+
+/** Intraday bars are timestamped, not dated — lightweight-charts needs seconds. */
+export type IntradayCandle = { time: number; open: number; high: number; low: number; close: number; volume: number | null };
 
 export type ShareDetail = {
   id: string;
@@ -43,6 +47,14 @@ export type ShareDetail = {
   taAt: Date | null;
   inWatchlist: boolean;
   candles: ShareCandle[];
+  /** Today's session, five minutes a bar. Empty outside market hours. */
+  intraday: IntradayCandle[];
+  /** True when the price above is today's, not the last close. */
+  isLive: boolean;
+  /** BSE's own "as of" for the live price, e.g. "11:48". */
+  liveAsOf: string | null;
+  sessionHigh: number | null;
+  sessionLow: number | null;
   levels: LevelSet | null;
   signals: Signal[];
   reaction: Reaction;
@@ -102,6 +114,13 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
   const identity = await resolveShare(upper);
   const name = identity.name;
 
+  // The live session, when BSE lists this company. Daily bars carry yesterday's
+  // close until the session ends, which is right for analysis and useless for
+  // watching — this is the half that moves.
+  const intradaySeries = identity.scripCode ? await liveIntraday(identity.scripCode) : null;
+  const session = intradaySeries?.ok ? intradaySeries.data : null;
+  const intraday = session ? toIntradayCandles(session.points, 5 satisfies IntradayInterval) : [];
+
   // News and events are secondary: a share page with a chart and no headlines
   // is useful, one that fails because Google was slow is not.
   const [news, events] = [await liveNews(name), await liveEvents()];
@@ -141,6 +160,14 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
 
   const levels = ta.levels;
 
+  // Prefer the session's own previous close: on the first tick of a new day the
+  // daily series has not caught up, and measuring today's move against the day
+  // before yesterday would be quietly wrong.
+  const livePrice = session?.lastPrice ?? null;
+  const previousClose = session?.previousClose ?? ta.previousClose ?? lastBar?.previousClose ?? null;
+  const liveChange =
+    livePrice != null && previousClose != null ? livePrice - previousClose : ta.dayChange;
+
   const signals = buildSignals({
     close: ta.close,
     rsi14: ta.rsi14,
@@ -171,17 +198,17 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     // page, so the link runs the other way: sector pages list their shares.
     sectors: [],
     yahooSector: null,
-    lastPrice: ta.close,
-    previousClose: ta.previousClose ?? lastBar?.previousClose ?? null,
-    dayChange: ta.dayChange,
-    dayChangePercent: ta.dayChangePercent,
-    dayHigh: lastBar?.high ?? null,
-    dayLow: lastBar?.low ?? null,
+    lastPrice: livePrice ?? ta.close,
+    previousClose,
+    dayChange: liveChange,
+    dayChangePercent: previousClose ? ((liveChange ?? 0) / previousClose) * 100 : ta.dayChangePercent,
+    dayHigh: session?.dayHigh ?? lastBar?.high ?? null,
+    dayLow: session?.dayLow ?? lastBar?.low ?? null,
     week52High: ta.week52High,
     week52Low: ta.week52Low,
     volume: lastBar?.volume ?? null,
     quotedAt: lastBar ? new Date(`${lastBar.day}T00:00:00.000Z`) : null,
-    quoteSource: "NSE",
+    quoteSource: livePrice != null ? "BSE" : "NSE",
     rsi14: ta.rsi14,
     atr14: ta.atr14,
     atrPercent: ta.atrPercent,
@@ -193,6 +220,14 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     taAt: new Date(history.at),
     inWatchlist: await isWatched(upper),
     candles: candles.map(toChartCandle),
+    intraday: intraday.map((candle) => ({
+      time: Math.floor(candle.t / 1000),
+      open: candle.o, high: candle.h, low: candle.l, close: candle.c, volume: candle.v,
+    })),
+    isLive: livePrice != null,
+    liveAsOf: session?.asOf ?? null,
+    sessionHigh: session?.dayHigh ?? null,
+    sessionLow: session?.dayLow ?? null,
     levels,
     signals,
     // The share's moves on its own heaviest-news days needed a year of stored
