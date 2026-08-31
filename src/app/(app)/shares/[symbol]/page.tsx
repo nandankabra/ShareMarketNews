@@ -6,8 +6,9 @@ import { ArrowLeft, Star } from "lucide-react";
 import { PageHeader, PageShell } from "@/components/layout/page-header";
 import { ChangePill } from "@/components/market/change-pill";
 import { DayRangeBar } from "@/components/market/day-range-bar";
-import { CandleChart } from "@/components/shares/candle-chart";
-import { LiveRefresher } from "@/components/market/live-refresher";
+import { LiveChart } from "@/components/shares/live-chart";
+import { LivePrice } from "@/components/shares/live-price";
+import { LiveSessionProvider } from "@/components/shares/live-session";
 import { NewsList } from "@/components/shares/news-list";
 import { ReactionPanel } from "@/components/shares/reaction-panel";
 import { SignalList } from "@/components/shares/signal-list";
@@ -76,6 +77,7 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
   ];
 
   return (
+    <LiveSessionProvider symbol={share.symbol} enabled={marketOpen && share.intraday.length > 0}>
     <PageShell>
       <Link
         href="/sectors"
@@ -104,23 +106,13 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
           </span>
         }
         actions={
-          // The header wraps on a narrow screen, and once the price is on its
-          // own line under a left-aligned title, right-aligning it leaves it
-          // stranded. It aligns left until there is room to sit beside the title.
-          <div className="text-left sm:text-right">
-            <div className="tabular font-mono text-3xl font-semibold tracking-tight">
-              {share.lastPrice != null ? `₹${formatInr(share.lastPrice)}` : "—"}
-            </div>
-            <div className="mt-1 flex items-center justify-start gap-2 sm:justify-end">
-              {share.dayChangePercent != null ? (
-                <ChangePill percent={share.dayChangePercent} absolute={share.dayChange} />
-              ) : null}
-              <span className="text-muted-foreground font-mono text-[10px]">
-                {share.quotedAt ? relativeTime(share.quotedAt, new Date(now)) : "no quote yet"}
-                {share.quoteSource === "BSE" ? " · BSE price" : ""}
-              </span>
-            </div>
-          </div>
+          <LivePrice
+            initialPrice={share.lastPrice}
+            initialChange={share.dayChange}
+            initialChangePercent={share.dayChangePercent}
+            initialAsOf={share.liveAsOf}
+            source={share.quoteSource}
+          />
         }
       />
 
@@ -157,8 +149,7 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
               {share.taAt ? ` · indicators ${relativeTime(share.taAt, new Date(now))}` : ""}
             </span>
           </div>
-          <CandleChart candles={share.candles} intraday={share.intraday} levels={share.levels} />
-          {marketOpen && share.intraday.length > 0 ? <LiveRefresher /> : null}
+          <LiveChart candles={share.candles} intraday={share.intraday} levels={share.levels} />
         </Card>
 
         <div className="flex flex-col gap-3">
@@ -217,5 +208,6 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
         </Card>
       </div>
     </PageShell>
+    </LiveSessionProvider>
   );
 }

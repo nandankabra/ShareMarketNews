@@ -64,6 +64,18 @@ export function CandleChart({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const colorsRef = useRef<{ up: string; down: string }>({ up: "", down: "" });
+  /** The data the chart currently holds, so the next change can be a delta. */
+  const drawnRef = useRef<Bar[]>([]);
+  /**
+   * The newest data, readable by the creation effect without becoming one of
+   * its dependencies. Listing `visible` there would rebuild the chart on every
+   * live poll, which is the blink this exists to avoid; reading a ref keeps the
+   * effect honest about what it actually depends on.
+   */
+  const latestRef = useRef<Bar[]>([]);
   const hasSession = intraday.length > 0;
   // Opening on the live session when there is one is the whole point; outside
   // market hours there is nothing to show, so it falls back to three months.
@@ -95,8 +107,27 @@ export function CandleChart({
     }));
   }, [candles, intraday, range]);
 
+  /**
+   * When the chart must be thrown away and redrawn, as opposed to updated.
+   *
+   * Deliberately not `visible` itself: that array changes every time a live
+   * poll lands, and rebuilding then is exactly the blink this refactor removes.
+   * A rebuild is only right when the dataset is a different one — a range
+   * switch, or a new session whose first bar has a different timestamp.
+   */
+  const rebuildKey = `${range}:${visible[0]?.time ?? 0}`;
+
+  // Declared before the creation effect on purpose: effects run in declaration
+  // order, so the ref is current by the time that one reads it. Assigning during
+  // render would be simpler and is not allowed — a ref written while rendering
+  // makes the render impure and the compiler rejects it.
+  useEffect(() => {
+    latestRef.current = visible;
+  }, [visible]);
+
   useEffect(() => {
     const container = containerRef.current;
+    const visible = latestRef.current;
     if (!container || visible.length === 0) return;
 
     const dark = resolvedTheme === "dark";
@@ -124,6 +155,8 @@ export function CandleChart({
     });
     chartRef.current = chart;
 
+    colorsRef.current = { up, down };
+
     const candleSeries: ISeriesApi<"Candlestick"> = chart.addSeries(CandlestickSeries, {
       upColor: up,
       downColor: down,
@@ -149,6 +182,9 @@ export function CandleChart({
       priceScaleId: "volume",
     });
     chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    candleRef.current = candleSeries;
+    volumeRef.current = volumeSeries;
+    drawnRef.current = visible;
     volumeSeries.setData(
       visible.map((candle) => ({
         time: candle.time,
@@ -221,8 +257,55 @@ export function CandleChart({
       // accumulate and the page slowly leaks.
       chart.remove();
       chartRef.current = null;
+      candleRef.current = null;
+      volumeRef.current = null;
+      drawnRef.current = [];
     };
-  }, [visible, levels, resolvedTheme, isIntraday]);
+  }, [rebuildKey, levels, resolvedTheme, isIntraday]);
+
+  /**
+   * Apply a live update without rebuilding.
+   *
+   * `setData` replaces the whole series, which resets zoom and pan and makes
+   * the chart blink — fine once, wrong every fifteen seconds. `update()` is the
+   * incremental path lightweight-charts provides: hand it the newest bar and it
+   * either replaces the last one or appends, leaving the viewport alone. That is
+   * the difference between a chart that refreshes and one that ticks.
+   *
+   * Only the bars that actually changed are sent. In a live session that is the
+   * final candle growing, plus a new one every five minutes.
+   */
+  useEffect(() => {
+    const series = candleRef.current;
+    const volume = volumeRef.current;
+    const previous = drawnRef.current;
+    if (!series || !volume || visible.length === 0 || previous.length === 0) return;
+
+    // A different dataset entirely — the rebuild effect owns that case.
+    if (previous[0]?.time !== visible[0]?.time || visible.length < previous.length) return;
+
+    const { up, down } = colorsRef.current;
+    // Everything from the last previously-known bar onward: that bar may have
+    // moved since, and anything after it is new.
+    const from = Math.max(0, previous.length - 1);
+
+    for (const candle of visible.slice(from)) {
+      series.update({
+        time: candle.time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      });
+      volume.update({
+        time: candle.time,
+        value: candle.volume ?? 0,
+        color: candle.close >= candle.open ? `${up}55` : `${down}55`,
+      });
+    }
+
+    drawnRef.current = visible;
+  }, [visible]);
 
   if (candles.length === 0) {
     return (
