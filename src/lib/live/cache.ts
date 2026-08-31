@@ -91,12 +91,12 @@ export const TTL = {
    * Quotes are daily closes now, not ticks — so this is not precision, it is
    * how often a sector page pays to warm ten of them.
    *
-   * Now that quotes are live last-traded prices rather than yesterday's close,
-   * this is real freshness rather than wasted precision — but it is still what
-   * a sector page pays to warm eight of them, so it stays a minute rather than
-   * seconds. Fast enough to watch, slow enough to stay polite.
+   * The last traded price changes continuously, and this is what the number at
+   * the top of a share page is measuring. Thirty seconds is two calls a minute
+   * for a share however many people are watching it — the cache is shared, so
+   * the cost does not scale with viewers.
    */
-  quote: 60,
+  quote: 30,
   /** Daily bars only change once a day; the intraday tail is what moves. */
   candles: 900,
   /** Google News is the politeness-sensitive one: 3s floor, big result sets. */
@@ -108,9 +108,10 @@ export const TTL = {
   /** Strikes move continuously; this is the one worth keeping short. */
   optionChain: 300,
   /**
-   * The live session. Matched to the upstream's own cadence — it publishes one
-   * point per minute, so asking more often returns the same series and asking
-   * less often makes a live chart lag its own clock.
+   * The live session. The upstream publishes one point per minute, so asking
+   * much more often returns an identical series — but a full sixty seconds
+   * meant a poll could land just before a new point and show a chart two
+   * minutes behind. Forty-five keeps the newest candle within a minute of real.
    */
-  intraday: 60,
+  intraday: 45,
 } as const;

@@ -45,6 +45,9 @@ function toTime(day: string): UTCTimestamp {
   return (Date.parse(`${day}T00:00:00Z`) / 1000) as UTCTimestamp;
 }
 
+/** India is UTC+5:30 year round — no DST, so a constant is exactly right. */
+const IST_OFFSET_SECONDS = 5.5 * 3600;
+
 /** Daily and intraday bars differ only in how their time is expressed. */
 type Bar = { time: UTCTimestamp; open: number; high: number; low: number; close: number; volume: number | null };
 
@@ -72,8 +75,14 @@ export function CandleChart({
 
   const visible = useMemo<Bar[]>(() => {
     if (range === "1D" && intraday.length > 0) {
+      // lightweight-charts renders a UTCTimestamp in UTC and offers no timezone
+      // setting, so an Indian session ran 03:45–10:00 on the axis instead of
+      // 09:15–15:30. Shifting the timestamps by the IST offset makes the axis
+      // and the crosshair read in market time, which is the only clock that
+      // means anything here. Daily bars are deliberately not shifted: they are
+      // dates at UTC midnight, and moving them would change the date shown.
       return intraday.map((candle) => ({
-        time: candle.time as UTCTimestamp,
+        time: (candle.time + IST_OFFSET_SECONDS) as UTCTimestamp,
         open: candle.open, high: candle.high, low: candle.low, close: candle.close, volume: candle.volume,
       }));
     }

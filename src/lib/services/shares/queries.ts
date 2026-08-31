@@ -164,6 +164,8 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
   // daily series has not caught up, and measuring today's move against the day
   // before yesterday would be quietly wrong.
   const livePrice = session?.lastPrice ?? null;
+  const lastTick = session?.points.at(-1)?.at ?? null;
+  const liveAt = lastTick != null ? new Date(lastTick) : null;
   const previousClose = session?.previousClose ?? ta.previousClose ?? lastBar?.previousClose ?? null;
   const liveChange =
     livePrice != null && previousClose != null ? livePrice - previousClose : ta.dayChange;
@@ -207,7 +209,11 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     week52High: ta.week52High,
     week52Low: ta.week52Low,
     volume: lastBar?.volume ?? null,
-    quotedAt: lastBar ? new Date(`${lastBar.day}T00:00:00.000Z`) : null,
+    // The live price and its timestamp must come from the same place. Taking
+    // the price from the session and the time from the newest daily bar is how
+    // a page ends up showing a current price stamped "21d ago" — which is what
+    // it did for a share whose NSE daily history is thin.
+    quotedAt: liveAt ?? (lastBar ? new Date(`${lastBar.day}T00:00:00.000Z`) : null),
     quoteSource: livePrice != null ? "BSE" : "NSE",
     rsi14: ta.rsi14,
     atr14: ta.atr14,

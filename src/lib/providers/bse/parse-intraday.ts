@@ -45,8 +45,12 @@ export type IntradaySeries = {
   points: IntradayPoint[];
   previousClose: number | null;
   lastPrice: number | null;
+  /** The session's real extremes, computed from the series. */
   dayHigh: number | null;
   dayLow: number | null;
+  /** BSE's rounded chart bounds. Not the high and low — see parse below. */
+  axisHigh: number | null;
+  axisLow: number | null;
   /** BSE's own "as of", which is the honest timestamp for the last point. */
   asOf: string | null;
 };
@@ -137,12 +141,23 @@ export function parseBseIntraday(body: string, scripCode: string): IntradaySerie
 
   points.sort((a, b) => a.at - b.at);
 
+  // `HighVal` and `LowVal` are the *chart axis* bounds, not the session's high
+  // and low — they arrive pre-rounded to whole numbers that bracket the data.
+  // Measured against LOTUSDEV mid-session: the field said 186/180 while the
+  // series itself ranged 185.65/180.15, and against Lotus Chocolate it said
+  // 680/600 for a real 664/610. Taking them at face value put a visibly wrong
+  // range on the page and mis-placed the day-range marker.
+  const prices = points.map((point) => point.price);
+
   return {
     points,
     previousClose: num(envelope.data.PrevClose),
     lastPrice: num(envelope.data.CurrVal) ?? points.at(-1)?.price ?? null,
-    dayHigh: num(envelope.data.HighVal),
-    dayLow: num(envelope.data.LowVal),
+    dayHigh: prices.length ? Math.max(...prices) : null,
+    dayLow: prices.length ? Math.min(...prices) : null,
+    /** BSE's rounded axis bounds, kept only so a chart can pad its scale. */
+    axisHigh: num(envelope.data.HighVal),
+    axisLow: num(envelope.data.LowVal),
     asOf: envelope.data.CurrTime ?? null,
   };
 }

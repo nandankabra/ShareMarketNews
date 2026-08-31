@@ -12,15 +12,16 @@ import { useRouter } from "next/navigation";
  * them in place, so the candles advance without the page flashing or losing
  * scroll position.
  *
- * Sixty seconds because the upstream publishes one point per minute — polling
- * faster would redraw the same bar. And because the fetch behind it is cached
- * for the same window, ten people watching one share still cost one request a
- * minute between them.
+ * Thirty seconds. The intraday series only advances once a minute, but the
+ * traded price moves continuously, so the header number is worth refreshing
+ * more often than the candles are. The fetches behind this are cached on the
+ * server, so ten people watching one share still cost two requests a minute
+ * between them rather than twenty each.
  *
  * Pauses when the tab is hidden. A phone left open on this page overnight
  * should not spend the night polling.
  */
-export function LiveRefresher({ intervalMs = 60_000 }: { intervalMs?: number }) {
+export function LiveRefresher({ intervalMs = 30_000 }: { intervalMs?: number }) {
   const router = useRouter();
 
   useEffect(() => {
