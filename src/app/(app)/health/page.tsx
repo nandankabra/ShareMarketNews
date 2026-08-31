@@ -96,14 +96,14 @@ export default async function HealthPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Source</TableHead>
-              <TableHead>What it feeds</TableHead>
+              <TableHead className="hidden md:table-cell">What it feeds</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Last success</TableHead>
-              <TableHead className="text-right">Items</TableHead>
-              <TableHead className="text-right">Took</TableHead>
-              <TableHead className="text-right">Fails</TableHead>
-              <TableHead>Next try</TableHead>
-              <TableHead className="min-w-[200px]">Last error</TableHead>
+              <TableHead className="hidden md:table-cell">Last success</TableHead>
+              <TableHead className="hidden text-right sm:table-cell">Items</TableHead>
+              <TableHead className="hidden text-right lg:table-cell">Took</TableHead>
+              <TableHead className="hidden text-right lg:table-cell">Fails</TableHead>
+              <TableHead className="hidden lg:table-cell">Next try</TableHead>
+              <TableHead className="hidden min-w-[200px] lg:table-cell">Last error</TableHead>
               <TableHead aria-label="Refresh" />
             </TableRow>
           </TableHeader>
@@ -111,7 +111,7 @@ export default async function HealthPage() {
             {sources.map((source) => (
               <TableRow key={source.source}>
                 <TableCell className="font-mono text-[11px] font-semibold">{source.source}</TableCell>
-                <TableCell className="text-muted-foreground text-xs">{source.label}</TableCell>
+                <TableCell className="text-muted-foreground hidden text-xs md:table-cell">{source.label}</TableCell>
                 <TableCell>
                   {source.lastStatus === "OK" ? (
                     <Badge variant="up">OK</Badge>
@@ -121,29 +121,29 @@ export default async function HealthPage() {
                     <Badge>NEVER RUN</Badge>
                   )}
                 </TableCell>
-                <TableCell className="text-muted-foreground font-mono text-xs">
+                <TableCell className="text-muted-foreground hidden font-mono text-xs md:table-cell">
                   {relativeTime(source.lastSuccessAt, nowDate)}
                 </TableCell>
-                <TableCell className="tabular text-right font-mono text-xs">
+                <TableCell className="tabular hidden text-right font-mono text-xs sm:table-cell">
                   {source.itemCount ?? "—"}
                 </TableCell>
-                <TableCell className="tabular text-muted-foreground text-right font-mono text-xs">
+                <TableCell className="tabular text-muted-foreground hidden text-right font-mono text-xs lg:table-cell">
                   {source.durationMs != null ? `${source.durationMs}ms` : "—"}
                 </TableCell>
                 <TableCell
                   className={cn(
-                    "tabular text-right font-mono text-xs",
+                    "tabular hidden text-right font-mono text-xs lg:table-cell",
                     source.consecutiveFailures > 0 && "text-down font-semibold",
                   )}
                 >
                   {source.consecutiveFailures}
                 </TableCell>
-                <TableCell className="text-muted-foreground font-mono text-xs">
+                <TableCell className="text-muted-foreground hidden font-mono text-xs lg:table-cell">
                   {source.nextEligibleAt && source.nextEligibleAt.getTime() > now
                     ? `in ${Math.ceil((source.nextEligibleAt.getTime() - now) / 60_000)}m`
                     : "now"}
                 </TableCell>
-                <TableCell className="text-muted-foreground max-w-[300px] truncate text-xs">
+                <TableCell className="text-muted-foreground hidden max-w-[300px] truncate text-xs lg:table-cell">
                   {source.lastError ?? "—"}
                 </TableCell>
                 <TableCell>

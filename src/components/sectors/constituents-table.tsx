@@ -34,13 +34,13 @@ export function ConstituentsTable({ rows, now }: { rows: ConstituentRow[]; now: 
         <TableRow>
           <TableHead className="w-8" aria-label="Watchlist" />
           <TableHead>Symbol</TableHead>
-          <TableHead className="min-w-[180px]">Company</TableHead>
+          <TableHead className="hidden min-w-[180px] md:table-cell">Company</TableHead>
           <TableHead className="text-right">LTP</TableHead>
           <TableHead className="text-right">Change</TableHead>
-          <TableHead>Day range</TableHead>
-          <TableHead className="text-right">Volume</TableHead>
-          <TableHead className="text-right">RSI</TableHead>
-          <TableHead>Flags</TableHead>
+          <TableHead className="hidden lg:table-cell">Day range</TableHead>
+          <TableHead className="hidden text-right lg:table-cell">Volume</TableHead>
+          <TableHead className="hidden text-right md:table-cell">RSI</TableHead>
+          <TableHead className="hidden sm:table-cell">Flags</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -59,8 +59,14 @@ export function ConstituentsTable({ rows, now }: { rows: ConstituentRow[]; now: 
               >
                 {row.symbol}
               </Link>
+              {/* The Company column is hidden below md, and a bare ticker is not
+                  identifiable — so the name moves under the symbol rather than
+                  disappearing. */}
+              <span className="text-muted-foreground block max-w-[150px] truncate text-[10px] md:hidden">
+                {row.name}
+              </span>
             </TableCell>
-            <TableCell className="text-muted-foreground max-w-[240px] truncate text-xs">
+            <TableCell className="text-muted-foreground hidden max-w-[240px] truncate text-xs md:table-cell">
               {row.name}
             </TableCell>
             <TableCell className="text-right">
@@ -73,13 +79,13 @@ export function ConstituentsTable({ rows, now }: { rows: ConstituentRow[]; now: 
                 <span className="text-muted-foreground text-xs">—</span>
               )}
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden lg:table-cell">
               <DayRangeBar low={row.dayLow} high={row.dayHigh} last={row.lastPrice} />
             </TableCell>
-            <TableCell className="tabular text-muted-foreground text-right font-mono text-xs">
+            <TableCell className="tabular text-muted-foreground hidden text-right font-mono text-xs lg:table-cell">
               {formatCompact(row.volume)}
             </TableCell>
-            <TableCell className="tabular text-right font-mono text-xs">
+            <TableCell className="tabular hidden text-right font-mono text-xs md:table-cell">
               {row.rsi14 != null ? (
                 <span className={cn(row.rsi14 >= 70 && "text-down", row.rsi14 <= 30 && "text-up")}>
                   {row.rsi14.toFixed(0)}
@@ -88,7 +94,7 @@ export function ConstituentsTable({ rows, now }: { rows: ConstituentRow[]; now: 
                 <span className="text-muted-foreground">—</span>
               )}
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden sm:table-cell">
               <span className="flex flex-wrap gap-1">
                 {row.nextEvent ? <Badge variant="event">{eventChip(row.nextEvent)}</Badge> : null}
                 {row.newsCount > 0 ? <Badge>{row.newsCount} NEWS</Badge> : null}

@@ -183,7 +183,7 @@ export function CandleChart({
 
   if (candles.length === 0) {
     return (
-      <div className={cn("text-muted-foreground flex h-[320px] items-center justify-center rounded-md border border-dashed text-sm", className)}>
+      <div className={cn("text-muted-foreground flex h-[240px] items-center justify-center rounded-md border border-dashed text-sm sm:h-[320px]", className)}>
         No daily bars yet — they arrive with the post-close snapshot.
       </div>
     );
@@ -226,7 +226,10 @@ export function CandleChart({
         </div>
       </div>
 
-      <div ref={containerRef} className="h-[340px] w-full" />
+      {/* Shorter on a phone: 340px of chart leaves no room for the range
+          buttons and the readout below it on a small screen. lightweight-charts
+          is created with autoSize, so it reflows on rotation by itself. */}
+      <div ref={containerRef} className="h-[240px] w-full sm:h-[340px]" />
 
       <p className="text-muted-foreground mt-2 border-t pt-2 font-mono text-[9px] tracking-wide">
         Charts by{" "}

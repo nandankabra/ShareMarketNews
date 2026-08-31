@@ -102,9 +102,13 @@ export function AddShare() {
                   hit.inWatchlist ? "text-muted-foreground cursor-not-allowed" : "hover:bg-muted",
                 )}
               >
-                <span className="min-w-0">
-                  <span className="font-mono text-xs font-semibold">{hit.symbol}</span>
-                  <span className="text-muted-foreground ml-2 text-xs">{hit.name}</span>
+                {/* min-w-0 alone does not clip: the name needs `truncate` on
+                    the element that holds the text, and the row must be able to
+                    shrink below its content. BSE names run long — "Tata
+                    Consultancy Services Ltd" overflows a phone otherwise. */}
+                <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                  <span className="font-mono text-xs font-semibold shrink-0">{hit.symbol}</span>
+                  <span className="text-muted-foreground truncate text-xs">{hit.name}</span>
                 </span>
                 <span className="text-muted-foreground shrink-0 font-mono text-[10px]">
                   {hit.inWatchlist ? "on list" : (hit.sector ?? "NSE")}

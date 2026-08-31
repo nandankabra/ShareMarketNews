@@ -43,13 +43,13 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
       <TableHeader>
         <TableRow>
           <TableHead>Symbol</TableHead>
-          <TableHead className="min-w-[150px]">Note</TableHead>
+          <TableHead className="hidden min-w-[150px] md:table-cell">Note</TableHead>
           <TableHead className="text-right">LTP</TableHead>
           <TableHead className="text-right">Today</TableHead>
-          <TableHead className="text-right">Since added</TableHead>
-          <TableHead>30-day</TableHead>
-          <TableHead className="text-right">RSI</TableHead>
-          <TableHead>Flags</TableHead>
+          <TableHead className="text-right whitespace-nowrap">Since added</TableHead>
+          <TableHead className="hidden lg:table-cell">30-day</TableHead>
+          <TableHead className="hidden text-right md:table-cell">RSI</TableHead>
+          <TableHead className="hidden sm:table-cell">Flags</TableHead>
           <TableHead className="w-8" aria-label="Remove" />
         </TableRow>
       </TableHeader>
@@ -64,9 +64,17 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
                 {row.symbol}
               </Link>
               <p className="text-muted-foreground max-w-[160px] truncate text-[10px]">{row.name}</p>
+              {/* The Note column is hidden below md. Editing a note needs the
+                  wider layout, but the note itself is the reason you added the
+                  share — so it stays readable here rather than vanishing. */}
+              {row.note ? (
+                <p className="text-muted-foreground/80 max-w-[160px] truncate text-[10px] italic md:hidden">
+                  {row.note}
+                </p>
+              ) : null}
             </TableCell>
 
-            <TableCell>
+            <TableCell className="hidden md:table-cell">
               {editing === row.shareId ? (
                 <input
                   autoFocus
@@ -127,11 +135,11 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
               )}
             </TableCell>
 
-            <TableCell>
+            <TableCell className="hidden lg:table-cell">
               <Sparkline values={row.spark} />
             </TableCell>
 
-            <TableCell className="tabular text-right font-mono text-xs">
+            <TableCell className="tabular hidden text-right font-mono text-xs md:table-cell">
               {row.rsi14 != null ? (
                 <span className={cn(row.rsi14 >= 70 && "text-down", row.rsi14 <= 30 && "text-up")}>
                   {row.rsi14.toFixed(0)}
@@ -141,7 +149,7 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
               )}
             </TableCell>
 
-            <TableCell>
+            <TableCell className="hidden sm:table-cell">
               <span className="flex flex-wrap gap-1">
                 {row.nextEvent ? (
                   <Badge variant="event">

@@ -60,17 +60,17 @@ export function ChainTable({
       <TableHeader>
         <TableRow>
           <TableHead className="text-right">OI</TableHead>
-          <TableHead className="text-right">Chg OI</TableHead>
-          <TableHead className="text-right">Vol</TableHead>
-          <TableHead className="text-right">IV</TableHead>
+          <TableHead className="text-right hidden sm:table-cell">Chg OI</TableHead>
+          <TableHead className="text-right hidden lg:table-cell">Vol</TableHead>
+          <TableHead className="text-right hidden lg:table-cell">IV</TableHead>
           <TableHead className="text-right">LTP</TableHead>
-          <TableHead className="text-center">B</TableHead>
+          <TableHead className="text-center hidden sm:table-cell">B</TableHead>
           <TableHead className="text-center">Strike</TableHead>
-          <TableHead className="text-center">B</TableHead>
+          <TableHead className="text-center hidden sm:table-cell">B</TableHead>
           <TableHead className="text-right">LTP</TableHead>
-          <TableHead className="text-right">IV</TableHead>
-          <TableHead className="text-right">Vol</TableHead>
-          <TableHead className="text-right">Chg OI</TableHead>
+          <TableHead className="text-right hidden lg:table-cell">IV</TableHead>
+          <TableHead className="text-right hidden lg:table-cell">Vol</TableHead>
+          <TableHead className="text-right hidden sm:table-cell">Chg OI</TableHead>
           <TableHead className="text-right">OI</TableHead>
         </TableRow>
       </TableHeader>
@@ -87,19 +87,19 @@ export function ChainTable({
               <TableCell className={cn("tabular text-right font-mono", itmCall && "bg-muted/40")}>
                 {formatCompact(strike.ceOi)}
               </TableCell>
-              <TableCell className={cn("text-right", itmCall && "bg-muted/40")}>
+              <TableCell className={cn("hidden sm:table-cell text-right", itmCall && "bg-muted/40")}>
                 <OiChange value={strike.ceOiChange} />
               </TableCell>
-              <TableCell className={cn("tabular text-muted-foreground text-right font-mono", itmCall && "bg-muted/40")}>
+              <TableCell className={cn("hidden lg:table-cell tabular text-muted-foreground text-right font-mono", itmCall && "bg-muted/40")}>
                 {formatCompact(strike.ceVolume)}
               </TableCell>
-              <TableCell className={cn("tabular text-muted-foreground text-right font-mono", itmCall && "bg-muted/40")}>
+              <TableCell className={cn("hidden lg:table-cell tabular text-muted-foreground text-right font-mono", itmCall && "bg-muted/40")}>
                 {strike.ceIv != null ? strike.ceIv.toFixed(1) : "—"}
               </TableCell>
               <TableCell className={cn("tabular text-right font-mono font-semibold", itmCall && "bg-muted/40")}>
                 {strike.ceLtp != null ? formatInr(strike.ceLtp) : "—"}
               </TableCell>
-              <TableCell className={cn("text-center", itmCall && "bg-muted/40")}>
+              <TableCell className={cn("hidden sm:table-cell text-center", itmCall && "bg-muted/40")}>
                 <BuildupTag value={strike.ceBuildup} />
               </TableCell>
 
@@ -117,19 +117,19 @@ export function ChainTable({
               </TableCell>
 
               {/* Puts */}
-              <TableCell className={cn("text-center", itmPut && "bg-muted/40")}>
+              <TableCell className={cn("hidden sm:table-cell text-center", itmPut && "bg-muted/40")}>
                 <BuildupTag value={strike.peBuildup} />
               </TableCell>
               <TableCell className={cn("tabular text-right font-mono font-semibold", itmPut && "bg-muted/40")}>
                 {strike.peLtp != null ? formatInr(strike.peLtp) : "—"}
               </TableCell>
-              <TableCell className={cn("tabular text-muted-foreground text-right font-mono", itmPut && "bg-muted/40")}>
+              <TableCell className={cn("hidden lg:table-cell tabular text-muted-foreground text-right font-mono", itmPut && "bg-muted/40")}>
                 {strike.peIv != null ? strike.peIv.toFixed(1) : "—"}
               </TableCell>
-              <TableCell className={cn("tabular text-muted-foreground text-right font-mono", itmPut && "bg-muted/40")}>
+              <TableCell className={cn("hidden lg:table-cell tabular text-muted-foreground text-right font-mono", itmPut && "bg-muted/40")}>
                 {formatCompact(strike.peVolume)}
               </TableCell>
-              <TableCell className={cn("text-right", itmPut && "bg-muted/40")}>
+              <TableCell className={cn("hidden sm:table-cell text-right", itmPut && "bg-muted/40")}>
                 <OiChange value={strike.peOiChange} />
               </TableCell>
               <TableCell className={cn("tabular text-right font-mono", itmPut && "bg-muted/40")}>
