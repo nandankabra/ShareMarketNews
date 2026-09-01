@@ -5,6 +5,7 @@ import { LiveRefresher } from "@/components/market/live-refresher";
 import { StaleBanner } from "@/components/market/stale-banner";
 import { EmptyState } from "@/components/states";
 import { AddShare } from "@/components/watchlist/add-share";
+import { CorrelationMatrix } from "@/components/watchlist/correlation-matrix";
 import { WatchlistTable } from "@/components/watchlist/watchlist-table";
 import { Card } from "@/components/ui/card";
 import { serverNow } from "@/lib/server-now";
@@ -24,7 +25,7 @@ export const metadata: Metadata = { title: "Watchlist" };
 export const dynamic = "force-dynamic";
 
 export default async function WatchlistPage() {
-  const [rows, header, now] = await Promise.all([listWatchlist(), getMarketHeader(), serverNow()]);
+  const [{ rows, correlation }, header, now] = await Promise.all([listWatchlist(), getMarketHeader(), serverNow()]);
 
   return (
     <PageShell>
@@ -48,9 +49,12 @@ export default async function WatchlistPage() {
           description="Search above by company name or NSE symbol. Whatever you add is refreshed first, and its movement is measured from the price it was at when you added it — not from yesterday's close."
         />
       ) : (
-        <Card className="overflow-hidden">
-          <WatchlistTable rows={rows} now={now} />
-        </Card>
+        <>
+          <Card className="overflow-hidden">
+            <WatchlistTable rows={rows} now={now} />
+          </Card>
+          <CorrelationMatrix correlation={correlation} />
+        </>
       )}
     </PageShell>
   );

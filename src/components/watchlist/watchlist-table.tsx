@@ -49,6 +49,7 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
           <TableHead className="text-right whitespace-nowrap">Since added</TableHead>
           <TableHead className="hidden lg:table-cell">30-day</TableHead>
           <TableHead className="hidden text-right md:table-cell">RSI</TableHead>
+          <TableHead className="hidden text-right whitespace-nowrap lg:table-cell">20d RS</TableHead>
           <TableHead className="hidden sm:table-cell">Flags</TableHead>
           <TableHead className="w-8" aria-label="Remove" />
         </TableRow>
@@ -143,6 +144,24 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
               {row.rsi14 != null ? (
                 <span className={cn(row.rsi14 >= 70 && "text-down", row.rsi14 <= 30 && "text-up")}>
                   {row.rsi14.toFixed(0)}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </TableCell>
+
+            <TableCell
+              className="tabular hidden text-right font-mono text-xs lg:table-cell"
+              title={row.rsPercentile != null ? `Ranks ${row.rsPercentile.toFixed(0)}th percentile in this watchlist` : undefined}
+            >
+              {row.returnPercent20d != null ? (
+                <span
+                  className={cn(
+                    row.rsPercentile != null && row.rsPercentile >= 67 && "text-up",
+                    row.rsPercentile != null && row.rsPercentile <= 33 && "text-down",
+                  )}
+                >
+                  {formatPercent(row.returnPercent20d)}
                 </span>
               ) : (
                 <span className="text-muted-foreground">—</span>

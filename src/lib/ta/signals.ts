@@ -1,6 +1,7 @@
 import type { TrendState } from "@/lib/db/enums";
 
 import type { Level } from "./levels";
+import type { VolatilityRegime } from "./volatility";
 
 /**
  * Turn indicator numbers into statements a person can act on.
@@ -39,6 +40,9 @@ export type SignalInput = {
   crossDirection: "GOLDEN" | "DEATH" | null;
   nearestSupport: Level | null;
   nearestResistance: Level | null;
+  /** Daily trend vs. weekly trend; null when there isn't enough weekly history yet. */
+  confluence: { daily: "UP" | "DOWN" | "FLAT"; weekly: "UP" | "DOWN" | "FLAT"; aligned: boolean } | null;
+  volatilityRegime: VolatilityRegime | null;
 };
 
 export function trendStateFrom(close: number | null, sma200: number | null): TrendState {
@@ -116,6 +120,23 @@ export function buildSignals(input: SignalInput): Signal[] {
       Math.abs(level.distancePercent) <= 1 ? "WATCH" : "NEUTRAL",
       Math.abs(level.distancePercent) <= 1,
     );
+  }
+
+  if (input.confluence) {
+    const { daily, weekly, aligned } = input.confluence;
+    if (aligned && daily === "UP") {
+      push("CONFLUENCE_ALIGNED_UP", "Daily and weekly trend both up", "GOOD", true);
+    } else if (aligned && daily === "DOWN") {
+      push("CONFLUENCE_ALIGNED_DOWN", "Daily and weekly trend both down", "BAD", true);
+    } else if (daily !== weekly) {
+      push("CONFLUENCE_MIXED", `Daily trend ${daily.toLowerCase()}, weekly ${weekly.toLowerCase()}`, "NEUTRAL");
+    }
+  }
+
+  if (input.volatilityRegime === "HIGH") {
+    push("VOLATILITY_HIGH", "ATR near a 1-year high for this share — a wide-swing regime", "WATCH", true);
+  } else if (input.volatilityRegime === "LOW") {
+    push("VOLATILITY_LOW", "ATR near a 1-year low for this share — a tight-range regime", "WATCH", true);
   }
 
   return out;

@@ -4,6 +4,8 @@ import { istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
 import { liveDirectory, liveEvents, liveHistory, liveQuote } from "@/lib/live/sources";
+import { correlationMatrix, type CorrelationMatrix } from "@/lib/ta/correlation";
+import { periodReturn, rankRelativeStrength } from "@/lib/ta/relative-strength";
 import type { Candle } from "@/lib/ta/types";
 import { readWatchlist } from "@/lib/watchlist/store";
 
@@ -23,6 +25,16 @@ export type WatchlistRow = {
   spark: number[];
   newsCount: number;
   nextEvent: { eventDate: string; type: string } | null;
+  /** Return over the last 20 trading sessions, independent of when you added it. */
+  returnPercent20d: number | null;
+  /** Where that 20-day return ranks within this watchlist, 0-100. Null alone. */
+  rsPercentile: number | null;
+};
+
+export type WatchlistView = {
+  rows: WatchlistRow[];
+  /** How closely the tracked shares' daily returns move together. Null under 2 symbols. */
+  correlation: CorrelationMatrix | null;
 };
 
 /**
@@ -33,14 +45,17 @@ export type WatchlistRow = {
  * shape. The bars carry the price, the sparkline and the RSI together, so a row
  * costs one request rather than three.
  */
-export async function listWatchlist(): Promise<WatchlistRow[]> {
+export async function listWatchlist(): Promise<WatchlistView> {
   const entries = await readWatchlist();
-  if (entries.length === 0) return [];
+  if (entries.length === 0) return { rows: [], correlation: null };
 
   const events = await liveEvents();
   const today = istToday();
 
   const rows: WatchlistRow[] = [];
+  // Closes per symbol, gathered from the same history call each row already
+  // makes — correlation and relative strength cost nothing extra upstream.
+  const closesBySymbol: Array<{ symbol: string; closes: number[] }> = [];
   // Sequential: one request in flight per host, as everywhere else.
   for (const entry of entries) {
     const identity = await resolveShare(entry.symbol);
@@ -55,6 +70,8 @@ export async function listWatchlist(): Promise<WatchlistRow[]> {
 
     const ta = analyse(candles);
     const lastBar = history.ok ? history.data.at(-1) : undefined;
+    const closes = candles.map((candle) => candle.c);
+    if (closes.length > 0) closesBySymbol.push({ symbol: entry.symbol, closes });
 
     // The bars give the sparkline, the RSI and the baseline; the live quote
     // gives today's number. Without it every row showed yesterday's close
@@ -92,10 +109,22 @@ export async function listWatchlist(): Promise<WatchlistRow[]> {
       // page carries the headlines; this column would cost more than it says.
       newsCount: 0,
       nextEvent: nextEvent ? { eventDate: nextEvent.eventDate, type: nextEvent.type } : null,
+      returnPercent20d: periodReturn(closes, 20),
+      rsPercentile: null, // filled in below, once every row's return is known
     });
   }
 
-  return rows;
+  const ranked = rankRelativeStrength(
+    rows
+      .filter((row): row is WatchlistRow & { returnPercent20d: number } => row.returnPercent20d != null)
+      .map((row) => ({ symbol: row.symbol, returnPercent: row.returnPercent20d })),
+  );
+  const percentileBySymbol = new Map(ranked.map((row) => [row.symbol, row.percentile]));
+  for (const row of rows) row.rsPercentile = percentileBySymbol.get(row.symbol) ?? null;
+
+  const correlation = closesBySymbol.length >= 2 ? correlationMatrix(closesBySymbol) : null;
+
+  return { rows, correlation };
 }
 
 export type SearchHitRow = {

@@ -4,6 +4,7 @@ import { istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
 import { applyLivePrice, toIntradayCandles, type IntradayInterval } from "@/lib/live/intraday";
+import { analyseRegime } from "@/lib/live/regime";
 import { liveEvents, liveHistory, liveIntraday, liveNews } from "@/lib/live/sources";
 import { CATEGORY_LABEL, classifyHeadline } from "@/lib/news/classify";
 import { isRelevantHeadline } from "@/lib/news/relevance";
@@ -110,6 +111,7 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
   }));
 
   const ta = analyse(candles);
+  const regime = analyseRegime(candles);
   const lastBar = history.data.at(-1);
   const identity = await resolveShare(upper);
   const name = identity.name;
@@ -198,6 +200,8 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     crossDirection: ta.crossDirection,
     nearestSupport: nearest(levels?.supports, ta.close, "SUPPORT"),
     nearestResistance: nearest(levels?.resistances, ta.close, "RESISTANCE"),
+    confluence: regime.confluence,
+    volatilityRegime: regime.volatility.regime,
   });
 
   return {
