@@ -10,6 +10,7 @@ import {
 } from "@/lib/live/intraday";
 import type { IntradayCandle, ShareCandle } from "@/lib/services/shares/queries";
 import type { LevelSet } from "@/lib/ta/levels";
+import type { PivotLevels } from "@/lib/ta/pivot-points";
 
 import { CandleChart } from "./candle-chart";
 import { useSharedSession } from "./live-session";
@@ -36,6 +37,7 @@ export function LiveChart({
   points,
   initialLastPrice,
   levels,
+  pivots,
 }: {
   candles: ShareCandle[];
   /** The server's own fold, used until there is anything better to fold. */
@@ -43,6 +45,8 @@ export function LiveChart({
   points: LivePoint[];
   initialLastPrice: number | null;
   levels: LevelSet | null;
+  /** Daily-scale pivots for the daily ranges, intraday-scale for the 1D view. */
+  pivots: { daily: PivotLevels | null; intraday: PivotLevels | null };
 }) {
   const { session, ticks } = useSharedSession();
 
@@ -63,5 +67,14 @@ export function LiveChart({
     }));
   }, [session, ticks, points, intraday, initialLastPrice]);
 
-  return <CandleChart candles={candles} intraday={folded} levels={levels} />;
+  // The 1D view is the session, so it reads yesterday's pivots; every wider
+  // range is daily bars, which read the previous week's.
+  return (
+    <CandleChart
+      candles={candles}
+      intraday={folded}
+      levels={levels}
+      pivots={folded.length > 0 ? pivots.intraday : pivots.daily}
+    />
+  );
 }

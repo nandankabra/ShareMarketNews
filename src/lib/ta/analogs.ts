@@ -37,6 +37,15 @@ export type AnalogStudy = {
   worstFollow: number | null;
   upCount: number;
   downCount: number;
+  /**
+   * What any stretch of this series did over the same horizon, matched or not.
+   *
+   * The number that stops this being astrology. In a session drifting upward,
+   * every forward window is positive, so the analogs come back positive too and
+   * look like they predicted something. Set against the baseline, the reader
+   * can see whether the shape said anything the drift did not already say.
+   */
+  baselineFollow: number | null;
 };
 
 export type AnalogOptions = {
@@ -105,6 +114,7 @@ export function findAnalogs(closes: number[], options: AnalogOptions): AnalogStu
     worstFollow: null,
     upCount: 0,
     downCount: 0,
+    baselineFollow: null,
   };
 
   const n = closes.length;
@@ -113,6 +123,7 @@ export function findAnalogs(closes: number[], options: AnalogOptions): AnalogStu
   const current = returns(closes.slice(n - window));
 
   const scored: AnalogMatch[] = [];
+  const allFollows: number[] = [];
   let candidates = 0;
   // A candidate window ends at `index`. It must have a full horizon of bars
   // after it, and must not overlap the window being matched — a pattern is
@@ -122,13 +133,15 @@ export function findAnalogs(closes: number[], options: AnalogOptions): AnalogStu
     candidates++;
 
     const similarity = shapeCorrelation(current, returns(closes.slice(index - window + 1, index + 1)));
-    if (similarity == null || similarity < minSimilarity) continue;
 
     const from = closes[index];
     const to = closes[index + horizon];
     if (!from) continue;
+    const followPercent = ((to - from) / from) * 100;
+    allFollows.push(followPercent);
 
-    scored.push({ index, similarity, followPercent: ((to - from) / from) * 100 });
+    if (similarity == null || similarity < minSimilarity) continue;
+    scored.push({ index, similarity, followPercent });
   }
 
   // Best first, then thinned so no two chosen matches describe the same episode.
@@ -151,5 +164,6 @@ export function findAnalogs(closes: number[], options: AnalogOptions): AnalogStu
     worstFollow: follows.length > 0 ? Math.min(...follows) : null,
     upCount: follows.filter((value) => value > 0).length,
     downCount: follows.filter((value) => value < 0).length,
+    baselineFollow: median(allFollows),
   };
 }

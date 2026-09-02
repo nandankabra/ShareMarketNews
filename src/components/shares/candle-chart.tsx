@@ -14,12 +14,19 @@ import {
 import { useTheme } from "next-themes";
 
 import { useChartSettings } from "@/lib/chart/settings";
+import { connorsRsi } from "@/lib/ta/connors-rsi";
+import { toHeikinAshi } from "@/lib/ta/heikin-ashi";
 import type { IntradayCandle, ShareCandle } from "@/lib/services/shares/queries";
 import type { Level, LevelSet } from "@/lib/ta/levels";
+import type { PivotLevels } from "@/lib/ta/pivot-points";
 import { rsi } from "@/lib/ta/rsi";
 import { cn } from "@/lib/utils";
 
-const RSI_PANE_HEIGHT = 90;
+const INDICATOR_PANE_HEIGHT = 90;
+/** The moving average drawn over the volume histogram, as brokers label it. */
+const VOLUME_AVG_PERIOD = 9;
+/** Connors RSI's three periods: price RSI, streak RSI, and the return-rank window. */
+const CRSI_PARAMS = [3, 2, 100] as const;
 
 /**
  * The `count` levels closest to the price, per side.
@@ -81,6 +88,26 @@ function vwapSeries(bars: Bar[]): Array<number | null> {
   return out;
 }
 
+/**
+ * The pure Heikin Ashi transform, over the chart's own bar shape.
+ *
+ * Kept as an adapter rather than a second implementation: the arithmetic lives
+ * in `lib/ta/heikin-ashi` where it is tested, and this only moves the fields.
+ */
+function toHeikinAshiBars(bars: Bar[]): Bar[] {
+  const converted = toHeikinAshi(
+    bars.map((bar) => ({ t: bar.time, o: bar.open, h: bar.high, l: bar.low, c: bar.close, v: bar.volume })),
+  );
+  return converted.map((candle, index) => ({
+    time: bars[index].time,
+    open: candle.o,
+    high: candle.h,
+    low: candle.l,
+    close: candle.c,
+    volume: candle.v,
+  }));
+}
+
 function toTime(day: string): UTCTimestamp {
   return (Date.parse(`${day}T00:00:00Z`) / 1000) as UTCTimestamp;
 }
@@ -95,6 +122,7 @@ export function CandleChart({
   candles,
   intraday = [],
   levels,
+  pivots = null,
   className,
   /**
    * "intraday" is the grid pane: one interval, no range switcher, shorter.
@@ -107,6 +135,8 @@ export function CandleChart({
   candles: ShareCandle[];
   intraday?: IntradayCandle[];
   levels: LevelSet | null;
+  /** Previous-period pivots for this scale. Drawn only when the setting asks. */
+  pivots?: PivotLevels | null;
   className?: string;
   mode?: "full" | "intraday";
   intervalLabel?: string;
@@ -117,6 +147,9 @@ export function CandleChart({
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);
   const rsiRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const rsiSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const crsiRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeAvgRef = useRef<ISeriesApi<"Line"> | null>(null);
   const colorsRef = useRef<{ up: string; down: string }>({ up: "", down: "" });
   /** The data the chart currently holds, so the next change can be a delta. */
   const drawnRef = useRef<Bar[]>([]);
@@ -134,10 +167,15 @@ export function CandleChart({
   // Shared across every chart on the site rather than held here: see
   // `lib/chart/settings`. RSI is off by default because an indicator pane costs
   // vertical space, and the price is what someone came to look at.
-  const { rsi: showRsi, rsiPeriod, levelCount } = useChartSettings();
+  const { candleType, rsi: showRsi, rsiPeriod, rsiSignal, crsi: showCrsi, pivots: showPivots, volumeAvg, levelCount } =
+    useChartSettings();
   const { resolvedTheme } = useTheme();
 
   const ranges = useMemo(() => RANGES.filter((entry) => entry.key !== "1D" || hasSession), [hasSession]);
+  // Every oscillator adds a pane rather than taking room from the price, so
+  // switching one on makes the chart taller instead of squashing the candles.
+  const panesBelow = (showRsi ? 1 : 0) + (showCrsi ? 1 : 0);
+  const chartHeight = (mode === "intraday" ? 180 : 320) + panesBelow * (INDICATOR_PANE_HEIGHT + 10);
   const isIntraday = mode === "intraday" || (range === "1D" && hasSession);
 
   const visible = useMemo<Bar[]>(() => {
@@ -224,8 +262,13 @@ export function CandleChart({
       wickUpColor: up,
       wickDownColor: down,
     });
+    // Heikin Ashi is a display transform: the bodies change, the underlying
+    // prices do not. Indicators below stay on the real closes on purpose — an
+    // RSI of averaged-of-averaged closes is a different measurement wearing the
+    // same name, and the legend says which is which.
+    const drawn = candleType === "heikin" ? toHeikinAshiBars(visible) : visible;
     candleSeries.setData(
-      visible.map((candle) => ({
+      drawn.map((candle) => ({
         time: candle.time,
         open: candle.open,
         high: candle.high,
@@ -251,6 +294,24 @@ export function CandleChart({
         color: candle.close >= candle.open ? `${up}55` : `${down}55`,
       })),
     );
+
+    if (volumeAvg && visible.length >= VOLUME_AVG_PERIOD) {
+      const line = chart.addSeries(LineSeries, {
+        color: dark ? "#E0B252" : "#9A7420",
+        lineWidth: 1,
+        priceScaleId: "volume",
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      const values = smaSeries(visible.map((candle) => candle.volume ?? 0), VOLUME_AVG_PERIOD);
+      line.setData(
+        visible
+          .map((candle, index) => ({ time: candle.time, value: values[index] }))
+          .filter((point): point is { time: UTCTimestamp; value: number } => point.value != null),
+      );
+      volumeAvgRef.current = line;
+    }
 
     const closes = visible.map((candle) => candle.close);
     // A 20-session average over five-minute bars would span a day and a half of
@@ -305,31 +366,60 @@ export function CandleChart({
       vwapRef.current = vwap;
     }
 
-    // RSI in a pane of its own, below the price.
-    //
-    // The scale is pinned to 0-100 rather than autoscaled: an RSI that spends a
-    // month between 45 and 55 would otherwise fill its pane with noise and put
-    // the 30 and 70 lines off-screen, which is exactly backwards — the whole
-    // reading is where the line sits relative to those two.
-    if (showRsi && visible.length > rsiPeriod) {
-      const rsiSeries = chart.addSeries(
+    // Indicators go in panes of their own, below the price, in the order they
+    // were switched on. Their scales are pinned to 0-100 rather than
+    // autoscaled: an oscillator that spends a month between 45 and 55 would
+    // otherwise fill its pane with noise and push its own bands off-screen,
+    // which is exactly backwards — the whole reading is where the line sits
+    // against those bands.
+    let pane = 0;
+    const oscillator = (color: string, paneIndex: number) =>
+      chart.addSeries(
         LineSeries,
         {
-          color: dark ? "#D6A15C" : "#8A5A1F",
+          color,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: true,
           crosshairMarkerVisible: false,
           autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
         },
-        1,
+        paneIndex,
       );
-      const values = rsi(visible.map((candle) => candle.close), rsiPeriod);
-      rsiSeries.setData(
-        visible
-          .map((candle, index) => ({ time: candle.time, value: values[index] }))
-          .filter((point): point is { time: UTCTimestamp; value: number } => point.value != null),
-      );
+    const pointsOf = (values: Array<number | null>) =>
+      visible
+        .map((candle, index) => ({ time: candle.time, value: values[index] }))
+        .filter((point): point is { time: UTCTimestamp; value: number } => point.value != null);
+
+    if (showRsi && visible.length > rsiPeriod) {
+      pane += 1;
+      const rsiValues = rsi(closes, rsiPeriod);
+      const rsiSeries = oscillator(dark ? "#D6A15C" : "#8A5A1F", pane);
+      rsiSeries.setData(pointsOf(rsiValues));
+
+      // The signal line is a moving average of RSI itself — what a broker's
+      // chart means by "RSI 14 SMA 14". Crossings of it are the reason anyone
+      // draws it; the app draws it and says nothing about them.
+      if (rsiSignal) {
+        const signal = chart.addSeries(
+          LineSeries,
+          {
+            color: dark ? "#9B8FD6" : "#5F4FA3",
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          },
+          pane,
+        );
+        // Averaging a series with a null head: the SMA can only start once RSI
+        // has, so the run of nulls is trimmed and put back afterwards.
+        const filled = rsiValues.map((value) => value ?? 0);
+        const averaged = smaSeries(filled, rsiPeriod);
+        signal.setData(pointsOf(averaged.map((value, index) => (rsiValues[index] == null ? null : value))));
+        rsiSignalRef.current = signal;
+      }
+
       for (const level of [70, 30]) {
         rsiSeries.createPriceLine({
           price: level,
@@ -340,8 +430,61 @@ export function CandleChart({
           title: String(level),
         });
       }
-      chart.panes()[1]?.setHeight(RSI_PANE_HEIGHT);
+      chart.panes()[pane]?.setHeight(INDICATOR_PANE_HEIGHT);
       rsiRef.current = rsiSeries;
+    }
+
+    // Connors RSI swings far harder than the ordinary kind, so it gets its own
+    // bands at 90 and 10 rather than borrowing RSI's 70 and 30.
+    if (showCrsi && visible.length > CRSI_PARAMS[0] + 2) {
+      pane += 1;
+      const crsiSeries = oscillator(dark ? "#6FB6E8" : "#2F6FA0", pane);
+      crsiSeries.setData(pointsOf(connorsRsi(closes, ...CRSI_PARAMS)));
+      for (const level of [90, 10]) {
+        crsiSeries.createPriceLine({
+          price: level,
+          color: level === 90 ? down : up,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: String(level),
+        });
+      }
+      chart.panes()[pane]?.setHeight(INDICATOR_PANE_HEIGHT);
+      crsiRef.current = crsiSeries;
+    }
+
+    // Floor-trader pivots from the previous period: the pivot itself solid,
+    // its five levels either side dashed and fainter the further out they go.
+    if (showPivots && pivots) {
+      candleSeries.createPriceLine({
+        price: pivots.p,
+        color: accent,
+        lineWidth: 1,
+        lineStyle: 0,
+        axisLabelVisible: true,
+        title: "P",
+      });
+      pivots.r.forEach((price, index) => {
+        candleSeries.createPriceLine({
+          price,
+          color: down,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: index < 3,
+          title: `R${index + 1}`,
+        });
+      });
+      pivots.s.forEach((price, index) => {
+        candleSeries.createPriceLine({
+          price,
+          color: up,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: index < 3,
+          title: `S${index + 1}`,
+        });
+      });
     }
 
     // Support and resistance as price lines on the candle series, labelled with
@@ -380,9 +523,12 @@ export function CandleChart({
       volumeRef.current = null;
       vwapRef.current = null;
       rsiRef.current = null;
+      rsiSignalRef.current = null;
+      crsiRef.current = null;
+      volumeAvgRef.current = null;
       drawnRef.current = [];
     };
-  }, [rebuildKey, levels, resolvedTheme, isIntraday, showRsi, rsiPeriod, levelCount]);
+  }, [rebuildKey, levels, pivots, resolvedTheme, isIntraday, candleType, showRsi, rsiPeriod, rsiSignal, showCrsi, showPivots, volumeAvg, levelCount]);
 
   /**
    * Apply a live update without rebuilding.
@@ -424,16 +570,47 @@ export function CandleChart({
 
     // RSI is recursive too — Wilder's average carries forward — so the same
     // recompute-and-update-the-tail treatment keeps it honest without a redraw.
+    const closes = visible.map((candle) => candle.close);
     const rsiLine = rsiRef.current;
     if (rsiLine) {
-      const values = rsi(visible.map((candle) => candle.close), rsiPeriod);
+      const values = rsi(closes, rsiPeriod);
       for (let i = from; i < visible.length; i++) {
         const value = values[i];
         if (value != null) rsiLine.update({ time: visible[i].time, value });
       }
+      const signal = rsiSignalRef.current;
+      if (signal) {
+        const averaged = smaSeries(values.map((value) => value ?? 0), rsiPeriod);
+        for (let i = from; i < visible.length; i++) {
+          const value = averaged[i];
+          if (value != null && values[i] != null) signal.update({ time: visible[i].time, value });
+        }
+      }
     }
 
-    for (const candle of visible.slice(from)) {
+    const crsiLine = crsiRef.current;
+    if (crsiLine) {
+      const values = connorsRsi(closes, ...CRSI_PARAMS);
+      for (let i = from; i < visible.length; i++) {
+        const value = values[i];
+        if (value != null) crsiLine.update({ time: visible[i].time, value });
+      }
+    }
+
+    const volumeAvgLine = volumeAvgRef.current;
+    if (volumeAvgLine) {
+      const values = smaSeries(visible.map((candle) => candle.volume ?? 0), VOLUME_AVG_PERIOD);
+      for (let i = from; i < visible.length; i++) {
+        const value = values[i];
+        if (value != null) volumeAvgLine.update({ time: visible[i].time, value });
+      }
+    }
+
+    // Heikin Ashi bodies depend on every bar before them, so the tail is
+    // recomputed from the whole series rather than transformed bar by bar.
+    const drawn = candleType === "heikin" ? toHeikinAshiBars(visible) : visible;
+    for (let i = from; i < visible.length; i++) {
+      const candle = drawn[i];
       series.update({
         time: candle.time,
         open: candle.open,
@@ -442,14 +619,14 @@ export function CandleChart({
         close: candle.close,
       });
       volume.update({
-        time: candle.time,
-        value: candle.volume ?? 0,
-        color: candle.close >= candle.open ? `${up}55` : `${down}55`,
+        time: visible[i].time,
+        value: visible[i].volume ?? 0,
+        color: visible[i].close >= visible[i].open ? `${up}55` : `${down}55`,
       });
     }
 
     drawnRef.current = visible;
-  }, [visible, rsiPeriod]);
+  }, [visible, rsiPeriod, candleType]);
 
   if (mode === "intraday" ? visible.length === 0 : candles.length === 0) {
     return (
@@ -474,6 +651,14 @@ export function CandleChart({
           {intervalLabel ? (
             <span className="text-foreground font-semibold">{intervalLabel}</span>
           ) : null}
+          {candleType === "heikin" ? (
+            <span
+              className="text-primary font-semibold"
+              title="Heikin Ashi bodies are averaged, so the last close is not the traded price. The indicators below still use real closes."
+            >
+              Heikin Ashi
+            </span>
+          ) : null}
           <span className="text-muted-foreground flex items-center gap-1.5">
             <i className="bg-primary block h-0.5 w-3 rounded-full" aria-hidden /> SMA {isIntraday ? 9 : 20}
           </span>
@@ -497,6 +682,13 @@ export function CandleChart({
             <span className="text-muted-foreground flex items-center gap-1.5 font-mono text-[10px]">
               <i className="block h-0.5 w-3 rounded-full bg-[#8A5A1F] dark:bg-[#D6A15C]" aria-hidden />
               RSI {rsiPeriod}
+              {rsiSignal ? ` SMA ${rsiPeriod}` : ""}
+            </span>
+          ) : null}
+          {showCrsi ? (
+            <span className="text-muted-foreground flex items-center gap-1.5 font-mono text-[10px]">
+              <i className="block h-0.5 w-3 rounded-full bg-[#2F6FA0] dark:bg-[#6FB6E8]" aria-hidden />
+              CRSI {CRSI_PARAMS.join(" ")}
             </span>
           ) : null}
 
@@ -529,13 +721,7 @@ export function CandleChart({
           buttons and the readout below it on a small screen. lightweight-charts
           is created with autoSize, so it reflows on rotation by itself. The
           RSI pane is extra height rather than a share of the price's. */}
-      <div
-        ref={containerRef}
-        className={cn(
-          "w-full",
-          mode === "intraday" ? (showRsi ? "h-[270px]" : "h-[180px]") : showRsi ? "h-[330px] sm:h-[430px]" : "h-[240px] sm:h-[340px]",
-        )}
-      />
+      <div ref={containerRef} className="w-full" style={{ height: chartHeight }} />
 
       {mode === "full" ? (
         <p className="text-muted-foreground mt-2 border-t pt-2 font-mono text-[9px] tracking-wide">

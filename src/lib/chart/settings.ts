@@ -13,13 +13,32 @@ import { useSyncExternalStore } from "react";
  * chart on the page follows in the same tick.
  */
 export type ChartSettings = {
+  /** Real candles, or Heikin Ashi — a display transform, not a different price. */
+  candleType: "candles" | "heikin";
   rsi: boolean;
   rsiPeriod: number;
+  /** The moving average of RSI itself, drawn in the same pane. */
+  rsiSignal: boolean;
+  /** Connors RSI, in a pane of its own. */
+  crsi: boolean;
+  /** Floor-trader pivots from the previous period: P and five levels each side. */
+  pivots: boolean;
+  /** A moving average over the volume histogram. */
+  volumeAvg: boolean;
   /** How many supports and how many resistances to draw, each. 0 draws none. */
   levelCount: number;
 };
 
-export const DEFAULT_SETTINGS: ChartSettings = { rsi: false, rsiPeriod: 14, levelCount: 3 };
+export const DEFAULT_SETTINGS: ChartSettings = {
+  candleType: "candles",
+  rsi: false,
+  rsiPeriod: 14,
+  rsiSignal: true,
+  crsi: false,
+  pivots: false,
+  volumeAvg: false,
+  levelCount: 3,
+};
 
 export const RSI_PERIODS = [7, 9, 14, 21] as const;
 export const LEVEL_COUNTS = [0, 1, 2, 3, 5, 8] as const;
@@ -42,8 +61,14 @@ function read(): ChartSettings {
     if (typeof parsed !== "object" || parsed === null) return DEFAULT_SETTINGS;
 
     const saved = parsed as Partial<ChartSettings>;
+    const flag = (value: unknown, fallback: boolean) => (typeof value === "boolean" ? value : fallback);
     return {
-      rsi: typeof saved.rsi === "boolean" ? saved.rsi : DEFAULT_SETTINGS.rsi,
+      candleType: saved.candleType === "heikin" ? "heikin" : DEFAULT_SETTINGS.candleType,
+      rsi: flag(saved.rsi, DEFAULT_SETTINGS.rsi),
+      rsiSignal: flag(saved.rsiSignal, DEFAULT_SETTINGS.rsiSignal),
+      crsi: flag(saved.crsi, DEFAULT_SETTINGS.crsi),
+      pivots: flag(saved.pivots, DEFAULT_SETTINGS.pivots),
+      volumeAvg: flag(saved.volumeAvg, DEFAULT_SETTINGS.volumeAvg),
       rsiPeriod: (RSI_PERIODS as readonly number[]).includes(saved.rsiPeriod ?? -1)
         ? saved.rsiPeriod!
         : DEFAULT_SETTINGS.rsiPeriod,
@@ -70,11 +95,8 @@ function subscribe(listener: () => void): () => void {
   if (!hydrated) {
     hydrated = true;
     const saved = read();
-    if (
-      saved.rsi !== current.rsi ||
-      saved.rsiPeriod !== current.rsiPeriod ||
-      saved.levelCount !== current.levelCount
-    ) {
+    const keys = Object.keys(saved) as Array<keyof ChartSettings>;
+    if (keys.some((key) => saved[key] !== current[key])) {
       current = saved;
       emit();
     }

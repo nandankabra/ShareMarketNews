@@ -6,6 +6,7 @@ import { ArrowLeft, Star } from "lucide-react";
 import { PageHeader, PageShell } from "@/components/layout/page-header";
 import { ChangePill } from "@/components/market/change-pill";
 import { DayRangeBar } from "@/components/market/day-range-bar";
+import { AnalogPanel } from "@/components/shares/analog-panel";
 import { ChartSettings } from "@/components/shares/chart-settings";
 import { IntradayGrid } from "@/components/shares/intraday-grid";
 import { LiveChart } from "@/components/shares/live-chart";
@@ -174,6 +175,7 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
             points={share.intradayPoints}
             initialLastPrice={share.lastPrice}
             levels={share.chartLevels}
+            pivots={share.pivots}
           />
         </Card>
 
@@ -212,11 +214,19 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
             initialPoints={share.intradayPoints}
             initialLastPrice={share.lastPrice}
             levels={share.chartLevels}
+            pivots={share.pivots.intraday}
           />
         </Card>
       ) : null}
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <Card className="p-4">
+          <h2 className="text-muted-foreground mb-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
+            When this happened before
+          </h2>
+          <AnalogPanel daily={share.analogs.daily} intraday={share.analogs.intraday} />
+        </Card>
+
         <Card className="p-4">
           <h2 className="text-muted-foreground mb-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
             Calendar

@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { PageHeader, PageShell } from "@/components/layout/page-header";
+import { AnalogPanel } from "@/components/shares/analog-panel";
 import { ChainTable } from "@/components/options/chain-table";
 import { EmptyState } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { serverNow } from "@/lib/server-now";
 import { getChainView, listUnderlyings } from "@/lib/services/options/queries";
+import { getDailyAnalogs } from "@/lib/services/shares/queries";
 import { cn, formatCompact, formatInr, relativeTime } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "F&O" };
@@ -46,6 +48,12 @@ export default async function OptionsPage({
       </PageShell>
     );
   }
+
+  // Sequential, after the chain: one request in flight per host is the rule
+  // everywhere, and this one only ever hits a cache the share pages have
+  // usually warmed already. Indices have no equity history, so this is null for
+  // NIFTY and BANKNIFTY and the panel simply does not appear.
+  const analogs = await getDailyAnalogs(chain.symbol);
 
   // PCR above 1 means more puts are open than calls. It is a crowd-position
   // measure, not a signal, and the wording keeps that distinction.
@@ -150,6 +158,15 @@ export default async function OptionsPage({
               ))}
             </ul>
           </Card>
+
+          {analogs ? (
+            <Card className="p-4">
+              <h2 className="text-muted-foreground mb-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
+                When this happened before
+              </h2>
+              <AnalogPanel daily={analogs} intraday={null} />
+            </Card>
+          ) : null}
 
           <Card className="p-4">
             <h2 className="text-muted-foreground mb-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">

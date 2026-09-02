@@ -16,6 +16,7 @@ import {
 } from "@/lib/live/intraday";
 import type { IntradayCandle } from "@/lib/services/shares/queries";
 import type { LevelSet } from "@/lib/ta/levels";
+import type { PivotLevels } from "@/lib/ta/pivot-points";
 import { cn } from "@/lib/utils";
 
 /** Six panes is one per interval — past that they are too small to read anyway. */
@@ -79,12 +80,15 @@ export function IntradayGrid({
   initialPoints,
   initialLastPrice,
   levels,
+  pivots,
 }: {
   symbol: string;
   initialPoints: LivePoint[];
   initialLastPrice: number | null;
   /** The daily supports and resistances, drawn on the minute charts too — they are the same levels. */
   levels: LevelSet | null;
+  /** Yesterday's pivots: every pane here is intraday, whatever its interval. */
+  pivots: PivotLevels | null;
 }) {
   const { session, ticks } = useSharedSession();
   // False while the server renders and through hydration, true after — so the
@@ -223,6 +227,7 @@ export function IntradayGrid({
               candles={[]}
               intraday={series.get(pane.minutes) ?? []}
               levels={levels}
+              pivots={pivots}
             />
           </div>
         ))}

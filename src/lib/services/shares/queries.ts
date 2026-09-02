@@ -1,6 +1,6 @@
 import "server-only";
 
-import { istToday } from "@/lib/date/ist";
+import { istMinutesOfDay, istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
 import { applyLivePrice, toIntradayCandles, type IntradayInterval, type LivePoint } from "@/lib/live/intraday";
@@ -10,7 +10,10 @@ import { CATEGORY_LABEL, classifyHeadline } from "@/lib/news/classify";
 import { isRelevantHeadline } from "@/lib/news/relevance";
 import { summariseReaction, type Reaction } from "@/lib/news/reaction";
 import { buildSignals, trendStateFrom, type Signal } from "@/lib/ta/signals";
+import { findAnalogs, type AnalogStudy } from "@/lib/ta/analogs";
 import { computeLevels, type Level, type LevelSet } from "@/lib/ta/levels";
+import { pivotsFromPrevious, type PivotLevels } from "@/lib/ta/pivot-points";
+import { toWeekly } from "@/lib/ta/resample";
 import type { Confluence } from "@/lib/ta/trend";
 import { sessionVwap } from "@/lib/ta/vwap";
 import type { Candle } from "@/lib/ta/types";
@@ -18,6 +21,58 @@ import { isWatched } from "@/lib/watchlist/store";
 
 /** The most level lines a chart will ever be asked to draw, per side. */
 const MAX_CHART_LEVELS = 8;
+
+/**
+ * Pattern lengths for the analog search, per scope.
+ *
+ * Daily is deliberately short: NSE returns about seventy bars, and a twenty-bar
+ * pattern over seventy leaves almost nothing to compare it against. Ten and
+ * five is the longest pair that still finds separate episodes in that much
+ * history — and the panel shows the count, so a thin answer looks thin.
+ */
+const DAILY_ANALOG = { window: 10, horizon: 5 };
+const INTRADAY_ANALOG = { window: 20, horizon: 15 };
+
+export type AnalogMatchView = { label: string; similarity: number; followPercent: number };
+
+export type AnalogView = {
+  window: number;
+  horizon: number;
+  candidates: number;
+  medianFollow: number | null;
+  bestFollow: number | null;
+  worstFollow: number | null;
+  upCount: number;
+  downCount: number;
+  /** What any stretch did over the same horizon — the drift these outcomes sit against. */
+  baselineFollow: number | null;
+  matches: AnalogMatchView[];
+};
+
+/** "13:45" in market time, which is the only clock an intraday label should use. */
+function istClock(at: number): string {
+  const minutes = istMinutesOfDay(new Date(at));
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function toAnalogView(study: AnalogStudy, label: (index: number) => string): AnalogView {
+  return {
+    window: study.window,
+    horizon: study.horizon,
+    candidates: study.candidates,
+    medianFollow: study.medianFollow,
+    bestFollow: study.bestFollow,
+    worstFollow: study.worstFollow,
+    upCount: study.upCount,
+    downCount: study.downCount,
+    baselineFollow: study.baselineFollow,
+    matches: study.matches.map((match) => ({
+      label: label(match.index),
+      similarity: match.similarity,
+      followPercent: match.followPercent,
+    })),
+  };
+}
 
 export type ShareCandle = { time: string; open: number; high: number; low: number; close: number; volume: number | null };
 
@@ -72,10 +127,18 @@ export type ShareDetail = {
   levels: LevelSet | null;
   /** The same clustering, deeper — what the charts draw from, so "how many lines" is a real choice. */
   chartLevels: LevelSet | null;
+  /**
+   * Floor-trader pivots, one set per chart scale: an intraday chart reads the
+   * previous day, a daily chart the previous week. Computed here because the
+   * grid panes hold only today's session and could not derive either.
+   */
+  pivots: { intraday: PivotLevels | null; daily: PivotLevels | null };
   signals: Signal[];
   /** Daily, weekly and monthly trend side by side. Null until there is enough weekly history. */
   confluence: Confluence | null;
   volatility: Volatility;
+  /** Past stretches shaped like the current one, and what followed them. Descriptive only. */
+  analogs: { daily: AnalogView; intraday: AnalogView | null };
   reaction: Reaction;
   news: {
     id: string;
@@ -287,9 +350,24 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     sessionVwap: vwap,
     levels,
     chartLevels,
+    pivots: {
+      intraday: pivotsFromPrevious(candles),
+      daily: pivotsFromPrevious(toWeekly(candles)),
+    },
     signals,
     confluence: regime.confluence,
     volatility: regime.volatility,
+    analogs: {
+      daily: toAnalogView(findAnalogs(candles.map((candle) => candle.c), DAILY_ANALOG), (index) =>
+        new Date(candles[index].t).toISOString().slice(0, 10),
+      ),
+      intraday:
+        intraday.length > 0
+          ? toAnalogView(findAnalogs(intraday.map((candle) => candle.c), INTRADAY_ANALOG), (index) =>
+              istClock(intraday[index].t),
+            )
+          : null,
+    },
     // The share's moves on its own heaviest-news days needed a year of stored
     // mentions to identify those days. Nothing here can reconstruct that, and
     // inventing a range from the last week would be worse than saying so.
@@ -301,6 +379,23 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     news: headlines,
     events: shareEvents,
   };
+}
+
+/**
+ * The daily analog study on its own, for pages that want it without a whole
+ * share detail behind it — the option chain, where the underlying is usually a
+ * share and occasionally an index.
+ *
+ * Null when there is no daily history to search: NSE's historical endpoint
+ * serves equities, so NIFTY and BANKNIFTY have no series here to compare
+ * against, and saying nothing is the honest answer for them.
+ */
+export async function getDailyAnalogs(symbol: string): Promise<AnalogView | null> {
+  const history = await liveHistory(symbol.toUpperCase());
+  if (!history.ok || history.data.length === 0) return null;
+
+  const closes = history.data.map((bar) => bar.close);
+  return toAnalogView(findAnalogs(closes, DAILY_ANALOG), (index) => history.data[index].day);
 }
 
 export async function shareExists(symbol: string): Promise<boolean> {
