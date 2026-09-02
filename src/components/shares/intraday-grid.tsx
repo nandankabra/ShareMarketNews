@@ -4,15 +4,18 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import { Plus, X } from "lucide-react";
 
 import { CandleChart } from "@/components/shares/candle-chart";
+import { ChartSettings } from "@/components/shares/chart-settings";
 import { useSharedSession } from "@/components/shares/live-session";
 import {
   applyLivePrice,
+  mergeSessionPoints,
   toIntradayCandles,
   INTRADAY_INTERVALS,
   type IntradayInterval,
   type LivePoint,
 } from "@/lib/live/intraday";
 import type { IntradayCandle } from "@/lib/services/shares/queries";
+import type { LevelSet } from "@/lib/ta/levels";
 import { cn } from "@/lib/utils";
 
 /** Six panes is one per interval — past that they are too small to read anyway. */
@@ -31,16 +34,19 @@ function paneId(): string {
     : `${Date.now()}-${Math.random()}`;
 }
 
-function storageKey(symbol: string): string {
-  return `wd:intraday-grid:${symbol}`;
-}
+/**
+ * One key for every share, not one per symbol: the intervals someone watches
+ * at are a way of working, not a fact about a company. Set the grid up once
+ * and the next share opens the same way.
+ */
+const STORAGE_KEY = "wd:intraday-grid";
 
 /** Nothing to subscribe to — this store only ever answers "is this the client yet". */
 const subscribeNever = () => () => {};
 
-function loadLayout(symbol: string): IntradayInterval[] {
+function loadLayout(): IntradayInterval[] {
   try {
-    const raw = window.localStorage.getItem(storageKey(symbol));
+    const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_LAYOUT;
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return DEFAULT_LAYOUT;
@@ -65,19 +71,22 @@ function loadLayout(symbol: string): IntradayInterval[] {
  * one poll however many charts are open: the interval is a property of the
  * drawing, not of the fetch.
  *
- * The layout is remembered per symbol, because the intervals someone watches a
- * share at are a habit rather than a one-off choice.
+ * The layout is remembered across shares, because the intervals someone
+ * watches at are a habit rather than a one-off choice.
  */
 export function IntradayGrid({
   symbol,
   initialPoints,
   initialLastPrice,
+  levels,
 }: {
   symbol: string;
   initialPoints: LivePoint[];
   initialLastPrice: number | null;
+  /** The daily supports and resistances, drawn on the minute charts too — they are the same levels. */
+  levels: LevelSet | null;
 }) {
-  const { session } = useSharedSession();
+  const { session, ticks } = useSharedSession();
   // False while the server renders and through hydration, true after — so the
   // saved layout is read only once the markup the server produced has been
   // matched. Reading it any earlier is how a hydration mismatch happens.
@@ -88,24 +97,26 @@ export function IntradayGrid({
   // and a random id there would hand React a different key every pass.
   const saved = useMemo(
     () =>
-      (hydrated ? loadLayout(symbol) : DEFAULT_LAYOUT).map((minutes, index) => ({
+      (hydrated ? loadLayout() : DEFAULT_LAYOUT).map((minutes, index) => ({
         id: `${index}:${minutes}`,
         minutes,
       })),
-    [hydrated, symbol],
+    [hydrated],
   );
   const panes = chosen ?? saved;
 
   function save(next: Pane[]) {
     setChosen(next);
     try {
-      window.localStorage.setItem(storageKey(symbol), JSON.stringify(next.map((pane) => pane.minutes)));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next.map((pane) => pane.minutes)));
     } catch {
       // Not being able to remember the layout is not a reason to refuse to change it.
     }
   }
 
-  const points = session?.points ?? initialPoints;
+  // Published minutes plus the prices this page has watched: the second half is
+  // what puts a real body on the bars forming while you sit here.
+  const points = mergeSessionPoints(session?.points ?? initialPoints, ticks);
   const lastPrice = session?.lastPrice ?? initialLastPrice;
   // The upstream's own clock rather than the browser's: it decides which bucket
   // the live price belongs in, and the server's timestamp is the one the points
@@ -144,24 +155,29 @@ export function IntradayGrid({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-muted-foreground text-xs">
-          One session, several intervals — all drawn from the same poll. A 1-minute bar is a single
-          print, so only the one still forming has a body.
+        <p className="text-muted-foreground max-w-[46ch] text-xs">
+          One session, several intervals, all from the same poll. Minutes you watch here get a real
+          high and low from the prices as they arrive; minutes from before you opened the page have
+          only the single price the exchange published.
+          {ticks.length > 0 ? ` ${ticks.length} watched so far.` : ""}
         </p>
-        <button
-          type="button"
-          onClick={() => save([...panes, { id: paneId(), minutes: 5 }])}
-          disabled={panes.length >= MAX_PANES}
-          className={cn(
-            "inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors",
-            panes.length >= MAX_PANES
-              ? "text-muted-foreground/40 border-dashed"
-              : "text-muted-foreground hover:text-foreground hover:border-foreground/30",
-          )}
-        >
-          <Plus className="size-3" aria-hidden />
-          Add chart
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <ChartSettings />
+          <button
+            type="button"
+            onClick={() => save([...panes, { id: paneId(), minutes: 5 }])}
+            disabled={panes.length >= MAX_PANES}
+            className={cn(
+              "inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] transition-colors",
+              panes.length >= MAX_PANES
+                ? "text-muted-foreground/40 border-dashed"
+                : "text-muted-foreground hover:text-foreground hover:border-foreground/30",
+            )}
+          >
+            <Plus className="size-3" aria-hidden />
+            Add chart
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-3 xl:grid-cols-2">
@@ -206,7 +222,7 @@ export function IntradayGrid({
               intervalLabel={`${symbol} · ${label(pane.minutes)}`}
               candles={[]}
               intraday={series.get(pane.minutes) ?? []}
-              levels={null}
+              levels={levels}
             />
           </div>
         ))}

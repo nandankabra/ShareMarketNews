@@ -13,14 +13,27 @@ import {
 } from "lightweight-charts";
 import { useTheme } from "next-themes";
 
+import { useChartSettings } from "@/lib/chart/settings";
 import type { IntradayCandle, ShareCandle } from "@/lib/services/shares/queries";
-import type { LevelSet } from "@/lib/ta/levels";
+import type { Level, LevelSet } from "@/lib/ta/levels";
 import { rsi } from "@/lib/ta/rsi";
 import { cn } from "@/lib/utils";
 
-/** Wilder's period, and the two lines everyone reads it against. */
-const RSI_PERIOD = 14;
 const RSI_PANE_HEIGHT = 90;
+
+/**
+ * The `count` levels closest to the price, per side.
+ *
+ * Nearest rather than strongest: a level twenty percent away may well be the
+ * best-tested one in the series, and it is still not what anyone is watching
+ * this afternoon. The set handed in is already filtered down to levels that
+ * mean something, so choosing among them by distance is safe.
+ */
+function nearestLevels(levels: Level[] | undefined, spot: number | null, count: number): Level[] {
+  if (!levels || count <= 0) return [];
+  if (spot == null) return levels.slice(0, count);
+  return [...levels].sort((a, b) => Math.abs(a.price - spot) - Math.abs(b.price - spot)).slice(0, count);
+}
 
 const RANGES = [
   /** Today's session. Only offered when there is a session to show. */
@@ -118,11 +131,10 @@ export function CandleChart({
   // Opening on the live session when there is one is the whole point; outside
   // market hours there is nothing to show, so it falls back to three months.
   const [range, setRange] = useState<RangeKey>(hasSession ? "1D" : "3M");
-  // Off by default: an indicator pane costs vertical space, and the price is
-  // what someone came to look at. On, it gets a pane of its own rather than
-  // being squeezed onto the price scale, where 0-100 and ₹2,300 cannot share
-  // an axis honestly.
-  const [showRsi, setShowRsi] = useState(false);
+  // Shared across every chart on the site rather than held here: see
+  // `lib/chart/settings`. RSI is off by default because an indicator pane costs
+  // vertical space, and the price is what someone came to look at.
+  const { rsi: showRsi, rsiPeriod, levelCount } = useChartSettings();
   const { resolvedTheme } = useTheme();
 
   const ranges = useMemo(() => RANGES.filter((entry) => entry.key !== "1D" || hasSession), [hasSession]);
@@ -299,7 +311,7 @@ export function CandleChart({
     // month between 45 and 55 would otherwise fill its pane with noise and put
     // the 30 and 70 lines off-screen, which is exactly backwards — the whole
     // reading is where the line sits relative to those two.
-    if (showRsi && visible.length > RSI_PERIOD) {
+    if (showRsi && visible.length > rsiPeriod) {
       const rsiSeries = chart.addSeries(
         LineSeries,
         {
@@ -312,7 +324,7 @@ export function CandleChart({
         },
         1,
       );
-      const values = rsi(visible.map((candle) => candle.close), RSI_PERIOD);
+      const values = rsi(visible.map((candle) => candle.close), rsiPeriod);
       rsiSeries.setData(
         visible
           .map((candle, index) => ({ time: candle.time, value: values[index] }))
@@ -335,7 +347,8 @@ export function CandleChart({
     // Support and resistance as price lines on the candle series, labelled with
     // how many times each was tested — a line without its strength is just a
     // line someone drew.
-    for (const level of levels?.resistances ?? []) {
+    const spot = visible.at(-1)?.close ?? null;
+    for (const level of nearestLevels(levels?.resistances, spot, levelCount)) {
       candleSeries.createPriceLine({
         price: level.price,
         color: down,
@@ -345,7 +358,7 @@ export function CandleChart({
         title: `R ${level.touches}×`,
       });
     }
-    for (const level of levels?.supports ?? []) {
+    for (const level of nearestLevels(levels?.supports, spot, levelCount)) {
       candleSeries.createPriceLine({
         price: level.price,
         color: up,
@@ -369,7 +382,7 @@ export function CandleChart({
       rsiRef.current = null;
       drawnRef.current = [];
     };
-  }, [rebuildKey, levels, resolvedTheme, isIntraday, showRsi]);
+  }, [rebuildKey, levels, resolvedTheme, isIntraday, showRsi, rsiPeriod, levelCount]);
 
   /**
    * Apply a live update without rebuilding.
@@ -413,7 +426,7 @@ export function CandleChart({
     // recompute-and-update-the-tail treatment keeps it honest without a redraw.
     const rsiLine = rsiRef.current;
     if (rsiLine) {
-      const values = rsi(visible.map((candle) => candle.close), RSI_PERIOD);
+      const values = rsi(visible.map((candle) => candle.close), rsiPeriod);
       for (let i = from; i < visible.length; i++) {
         const value = values[i];
         if (value != null) rsiLine.update({ time: visible[i].time, value });
@@ -436,7 +449,7 @@ export function CandleChart({
     }
 
     drawnRef.current = visible;
-  }, [visible]);
+  }, [visible, rsiPeriod]);
 
   if (mode === "intraday" ? visible.length === 0 : candles.length === 0) {
     return (
@@ -480,20 +493,12 @@ export function CandleChart({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowRsi((on) => !on)}
-            aria-pressed={showRsi}
-            title={`Relative Strength Index over ${RSI_PERIOD} bars, in its own pane`}
-            className={cn(
-              "rounded border px-2 py-1 font-mono text-[10px] transition-colors",
-              showRsi
-                ? "border-primary/40 bg-primary/10 text-primary font-semibold"
-                : "text-muted-foreground hover:text-foreground border-transparent",
-            )}
-          >
-            RSI
-          </button>
+          {showRsi ? (
+            <span className="text-muted-foreground flex items-center gap-1.5 font-mono text-[10px]">
+              <i className="block h-0.5 w-3 rounded-full bg-[#8A5A1F] dark:bg-[#D6A15C]" aria-hidden />
+              RSI {rsiPeriod}
+            </span>
+          ) : null}
 
           {mode === "full" ? (
             <div className="flex gap-0.5">

@@ -6,6 +6,7 @@ import { ArrowLeft, Star } from "lucide-react";
 import { PageHeader, PageShell } from "@/components/layout/page-header";
 import { ChangePill } from "@/components/market/change-pill";
 import { DayRangeBar } from "@/components/market/day-range-bar";
+import { ChartSettings } from "@/components/shares/chart-settings";
 import { IntradayGrid } from "@/components/shares/intraday-grid";
 import { LiveChart } from "@/components/shares/live-chart";
 import { LivePrice } from "@/components/shares/live-price";
@@ -157,14 +158,23 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
                 </span>
               ) : null}
             </h2>
-            <span className="text-muted-foreground font-mono text-[10px]">
-              {share.intraday.length > 0
-                ? `${share.intraday.length} × 5-min${share.liveAsOf ? ` · ${share.liveAsOf}` : ""}`
-                : `${share.candles.length} bars`}
-              {share.taAt ? ` · indicators ${relativeTime(share.taAt, new Date(now))}` : ""}
-            </span>
+            <div className="flex items-center gap-3">
+              <ChartSettings />
+              <span className="text-muted-foreground font-mono text-[10px]">
+                {share.intraday.length > 0
+                  ? `${share.intraday.length} × 5-min${share.liveAsOf ? ` · ${share.liveAsOf}` : ""}`
+                  : `${share.candles.length} bars`}
+                {share.taAt ? ` · indicators ${relativeTime(share.taAt, new Date(now))}` : ""}
+              </span>
+            </div>
           </div>
-          <LiveChart candles={share.candles} intraday={share.intraday} levels={share.levels} />
+          <LiveChart
+            candles={share.candles}
+            intraday={share.intraday}
+            points={share.intradayPoints}
+            initialLastPrice={share.lastPrice}
+            levels={share.chartLevels}
+          />
         </Card>
 
 
@@ -201,6 +211,7 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
             symbol={share.symbol}
             initialPoints={share.intradayPoints}
             initialLastPrice={share.lastPrice}
+            levels={share.chartLevels}
           />
         </Card>
       ) : null}

@@ -3,6 +3,7 @@
 import { createContext, useContext } from "react";
 
 import { useLiveSession, type LiveSession } from "@/lib/hooks/use-live-session";
+import type { LivePoint } from "@/lib/live/intraday";
 
 /**
  * One poller for the whole page.
@@ -11,9 +12,15 @@ import { useLiveSession, type LiveSession } from "@/lib/hooks/use-live-session";
  * apart in the tree. Giving each its own hook would double the polling for the
  * same bytes, so the page opens one and shares it.
  */
-const SessionContext = createContext<{ session: LiveSession | null; stale: boolean }>({
+const SessionContext = createContext<{
+  session: LiveSession | null;
+  stale: boolean;
+  /** Prices this page has watched go by, which is range the published series does not carry. */
+  ticks: LivePoint[];
+}>({
   session: null,
   stale: false,
+  ticks: [],
 });
 
 export function LiveSessionProvider({

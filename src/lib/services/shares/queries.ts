@@ -10,11 +10,14 @@ import { CATEGORY_LABEL, classifyHeadline } from "@/lib/news/classify";
 import { isRelevantHeadline } from "@/lib/news/relevance";
 import { summariseReaction, type Reaction } from "@/lib/news/reaction";
 import { buildSignals, trendStateFrom, type Signal } from "@/lib/ta/signals";
-import type { Level, LevelSet } from "@/lib/ta/levels";
+import { computeLevels, type Level, type LevelSet } from "@/lib/ta/levels";
 import type { Confluence } from "@/lib/ta/trend";
 import { sessionVwap } from "@/lib/ta/vwap";
 import type { Candle } from "@/lib/ta/types";
 import { isWatched } from "@/lib/watchlist/store";
+
+/** The most level lines a chart will ever be asked to draw, per side. */
+const MAX_CHART_LEVELS = 8;
 
 export type ShareCandle = { time: string; open: number; high: number; low: number; close: number; volume: number | null };
 
@@ -67,6 +70,8 @@ export type ShareDetail = {
   /** Today's volume-weighted average price. Null outside a session. */
   sessionVwap: number | null;
   levels: LevelSet | null;
+  /** The same clustering, deeper — what the charts draw from, so "how many lines" is a real choice. */
+  chartLevels: LevelSet | null;
   signals: Signal[];
   /** Daily, weekly and monthly trend side by side. Null until there is enough weekly history. */
   confluence: Confluence | null;
@@ -189,6 +194,12 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     .sort((a, b) => a.eventDate.localeCompare(b.eventDate));
 
   const levels = ta.levels;
+  // A wider set for the charts alone. `analyse()` keeps three a side because
+  // that is what the read-out and the reaction panel should reason about — the
+  // strongest ones — while a chart lets you ask for more lines than that, and
+  // asking would be meaningless if the extra ones had never been computed.
+  const chartLevels =
+    candles.length >= 30 ? computeLevels(candles, { spot: ta.close ?? undefined, maxPerSide: MAX_CHART_LEVELS }) : null;
 
   // Prefer the session's own previous close: on the first tick of a new day the
   // daily series has not caught up, and measuring today's move against the day
@@ -275,6 +286,7 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     sessionLow: session?.dayLow ?? null,
     sessionVwap: vwap,
     levels,
+    chartLevels,
     signals,
     confluence: regime.confluence,
     volatility: regime.volatility,

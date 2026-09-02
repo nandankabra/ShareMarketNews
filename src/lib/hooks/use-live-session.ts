@@ -5,6 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import type { LivePoint } from "@/lib/live/intraday";
 import type { IntradayCandle } from "@/lib/services/shares/queries";
 
+/** A full session of four-a-minute polls is ~1500; this is headroom, not a target. */
+const MAX_TICKS = 4_000;
+
 export type LiveSession = {
   lastPrice: number | null;
   previousClose: number | null;
@@ -41,6 +44,15 @@ export type LiveSession = {
 export function useLiveSession(symbol: string, enabled: boolean, intervalMs = 15_000) {
   const [session, setSession] = useState<LiveSession | null>(null);
   const [stale, setStale] = useState(false);
+  /**
+   * Every traded price this page has seen.
+   *
+   * The published series moves once a minute; this poll runs four times in
+   * that minute, and each answer is a real price at a real moment. Keeping
+   * them is what lets a one-minute candle have a body while you watch it form
+   * — the range within a minute exists, it is just not published.
+   */
+  const [ticks, setTicks] = useState<LivePoint[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -67,6 +79,23 @@ export function useLiveSession(symbol: string, enabled: boolean, intervalMs = 15
         if (body.ok) {
           setSession(body);
           setStale(false);
+
+          // Stamped with when we saw it, not with the cache's own timestamp:
+          // the point of a tick is that it is an observation.
+          const price = body.lastPrice;
+          if (price != null && Number.isFinite(price) && price > 0) {
+            const at = Date.now();
+            setTicks((previous) => {
+              const last = previous[previous.length - 1];
+              // A repeat of the same price inside the same minute adds nothing
+              // to that minute's range, so it is not worth carrying.
+              if (last && last.price === price && Math.floor(last.at / 60_000) === Math.floor(at / 60_000)) {
+                return previous;
+              }
+              const next = [...previous, { at, price, volume: null }];
+              return next.length > MAX_TICKS ? next.slice(-MAX_TICKS) : next;
+            });
+          }
         } else {
           setStale(true);
         }
@@ -105,5 +134,5 @@ export function useLiveSession(symbol: string, enabled: boolean, intervalMs = 15
     };
   }, [symbol, enabled, intervalMs]);
 
-  return { session, stale };
+  return { session, stale, ticks };
 }

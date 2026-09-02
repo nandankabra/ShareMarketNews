@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyLivePrice, toIntradayCandles, INTRADAY_INTERVALS } from "./intraday";
+import { applyLivePrice, mergeSessionPoints, toIntradayCandles, INTRADAY_INTERVALS } from "./intraday";
 import type { IntradayPoint } from "@/lib/providers/bse/parse-intraday";
 
 /** 09:15:00 IST on an arbitrary day, as epoch ms. */
@@ -69,6 +69,45 @@ describe("toIntradayCandles", () => {
     const candles = toIntradayCandles(points, 5);
     expect(candles[0].l).toBe(90);
     expect(candles[1].h).toBe(130);
+  });
+});
+
+describe("mergeSessionPoints", () => {
+  /** A price observed at `seconds` past the open, the way a poll sees one. */
+  function tick(seconds: number, price: number): IntradayPoint {
+    return { at: OPEN + seconds * 1_000, price, volume: null };
+  }
+
+  it("gives a watched minute a real body, where the published minute has none", () => {
+    // What the exchange publishes for 09:15: one price, so no range at all.
+    const published = [minute(0, 100, 500)];
+    expect(toIntradayCandles(published, 1)[0]).toMatchObject({ o: 100, h: 100, l: 100, c: 100 });
+
+    // What the page saw during that same minute, four polls apart.
+    const watched = [tick(5, 100), tick(20, 103), tick(35, 97), tick(50, 101)];
+    const candle = toIntradayCandles(mergeSessionPoints(published, watched), 1)[0];
+
+    expect(candle.h).toBe(103);
+    expect(candle.l).toBe(97);
+    expect(candle.o).toBe(100);
+    expect(candle.c).toBe(101);
+  });
+
+  it("does not let ticks inflate the volume that traded", () => {
+    const published = [minute(0, 100, 500)];
+    const merged = mergeSessionPoints(published, [tick(10, 104), tick(40, 96)]);
+    expect(toIntradayCandles(merged, 1)[0].v).toBe(500);
+  });
+
+  it("keeps everything in time order, whichever arrived first", () => {
+    const merged = mergeSessionPoints([minute(2, 102), minute(0, 100)], [tick(90, 101)]);
+    const times = merged.map((point) => point.at);
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+  });
+
+  it("is the published series untouched when nothing has been watched", () => {
+    const published = [minute(0, 100), minute(1, 101)];
+    expect(mergeSessionPoints(published, [])).toBe(published);
   });
 });
 

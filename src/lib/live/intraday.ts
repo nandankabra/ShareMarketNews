@@ -119,3 +119,27 @@ export type IntradayInterval = (typeof INTRADAY_INTERVALS)[number];
 
 /** One minute of the session, as it crosses to the browser. */
 export type LivePoint = { at: number; price: number; volume: number | null };
+
+/** Ticks older than this are dropped, so a page left open all day stays bounded. */
+const MAX_TICKS = 4_000;
+
+/**
+ * The session as published, plus the prices this page has watched go by.
+ *
+ * The upstream gives one price a minute, which is why a settled one-minute
+ * candle has no body. But the live quote is polled several times a minute, and
+ * each poll is a real observation of a real traded price — so the minutes you
+ * are actually sitting and watching can have a true high and low, even though
+ * the ones before you opened the page cannot.
+ *
+ * The two are merged rather than one replacing the other: the published point
+ * carries the minute's volume, the ticks carry its range. Ticks arrive with no
+ * volume of their own — the quote endpoint has none — so they add range without
+ * inflating what traded.
+ */
+export function mergeSessionPoints(points: LivePoint[], ticks: LivePoint[]): LivePoint[] {
+  if (ticks.length === 0) return points;
+  const merged = [...points, ...ticks.slice(-MAX_TICKS)];
+  merged.sort((a, b) => a.at - b.at);
+  return merged;
+}
