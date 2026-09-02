@@ -104,6 +104,18 @@ export function applyLivePrice(
   ];
 }
 
-/** Intervals offered in the UI. One minute is deliberately absent — see above. */
-export const INTRADAY_INTERVALS = [5, 15, 30, 60] as const;
+/**
+ * Intervals offered in the UI.
+ *
+ * One minute is included but is a special case, and the difference is worth
+ * knowing before reading a 1-minute chart here: the upstream publishes one
+ * price per minute, so a settled 1-minute bar has open, high, low and close
+ * all equal — a line drawn in candle costume. Only the bar still forming has a
+ * real body, because the live price is folded into it as it moves. Three
+ * minutes up, the wicks mean what wicks normally mean.
+ */
+export const INTRADAY_INTERVALS = [1, 3, 5, 10, 15, 60] as const;
 export type IntradayInterval = (typeof INTRADAY_INTERVALS)[number];
+
+/** One minute of the session, as it crosses to the browser. */
+export type LivePoint = { at: number; price: number; volume: number | null };

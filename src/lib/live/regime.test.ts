@@ -24,41 +24,51 @@ describe("analyseRegime", () => {
     expect(result.confluence).toBeNull();
   });
 
-  it("reports aligned-up confluence on a steady multi-month climb", () => {
+  it("reports a fully aligned climb across all three timeframes", () => {
     const closes = Array.from({ length: 300 }, (_, i) => 100 + i * 0.5);
-    const result = analyseRegime(series(closes));
-    expect(result.confluence).not.toBeNull();
-    expect(result.confluence!.daily).toBe("UP");
-    expect(result.confluence!.weekly).toBe("UP");
-    expect(result.confluence!.aligned).toBe(true);
+    const confluence = analyseRegime(series(closes)).confluence;
+    expect(confluence).not.toBeNull();
+    expect(confluence!.timeframes.map((timeframe) => timeframe.label)).toEqual(["daily", "weekly", "monthly"]);
+    expect(confluence!.alignment).toBe("FULL");
+    expect(confluence!.direction).toBe("UP");
+    expect(confluence!.score).toBe(100);
   });
 
-  it("reports aligned-down confluence on a steady multi-month decline", () => {
+  it("reports a fully aligned decline the same way, signed the other direction", () => {
     const closes = Array.from({ length: 300 }, (_, i) => 500 - i * 0.5);
-    const result = analyseRegime(series(closes));
-    expect(result.confluence).not.toBeNull();
-    expect(result.confluence!.daily).toBe("DOWN");
-    expect(result.confluence!.weekly).toBe("DOWN");
-    expect(result.confluence!.aligned).toBe(true);
+    const confluence = analyseRegime(series(closes)).confluence;
+    expect(confluence!.alignment).toBe("FULL");
+    expect(confluence!.direction).toBe("DOWN");
+    expect(confluence!.score).toBe(-100);
   });
 
-  it("is not aligned when the close sits flat against its trailing average", () => {
+  it("still reads all three timeframes off the seventy bars NSE actually returns", () => {
+    const closes = Array.from({ length: 70 }, (_, i) => 100 + i * 0.5);
+    const confluence = analyseRegime(series(closes)).confluence;
+    expect(confluence).not.toBeNull();
+    expect(confluence!.timeframes.map((timeframe) => timeframe.label)).toEqual(["daily", "weekly", "monthly"]);
+    expect(confluence!.timeframes.every((timeframe) => timeframe.distancePercent != null)).toBe(true);
+  });
+
+  it("calls a series that goes nowhere untrending rather than aligned", () => {
     const closes = Array.from({ length: 300 }, (_, i) => 100 + (i % 2 === 0 ? 0.1 : -0.1));
-    const result = analyseRegime(series(closes));
-    expect(result.confluence).not.toBeNull();
-    expect(result.confluence!.aligned).toBe(false);
+    const confluence = analyseRegime(series(closes)).confluence;
+    expect(confluence!.alignment).toBe("NONE");
+    expect(confluence!.score).toBe(0);
   });
 
-  it("carries a volatility regime once there is enough history for ATR", () => {
+  it("carries a volatility regime and its direction once there is enough history", () => {
     const closes = Array.from({ length: 300 }, (_, i) => 100 + Math.sin(i / 10) * 5);
     const result = analyseRegime(series(closes));
     expect(result.volatility.atrPercentRank).not.toBeNull();
     expect(result.volatility.regime).not.toBeNull();
+    expect(result.volatility.trend).not.toBeNull();
   });
 
   it("leaves volatility null on too short a series", () => {
     const result = analyseRegime(series([100, 101, 102]));
     expect(result.volatility.atrPercentRank).toBeNull();
     expect(result.volatility.regime).toBeNull();
+    expect(result.volatility.trend).toBeNull();
   });
 });

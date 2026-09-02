@@ -3,14 +3,16 @@ import "server-only";
 import { istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
-import { applyLivePrice, toIntradayCandles, type IntradayInterval } from "@/lib/live/intraday";
-import { analyseRegime } from "@/lib/live/regime";
+import { applyLivePrice, toIntradayCandles, type IntradayInterval, type LivePoint } from "@/lib/live/intraday";
+import { analyseRegime, type Volatility } from "@/lib/live/regime";
 import { liveEvents, liveHistory, liveIntraday, liveNews } from "@/lib/live/sources";
 import { CATEGORY_LABEL, classifyHeadline } from "@/lib/news/classify";
 import { isRelevantHeadline } from "@/lib/news/relevance";
 import { summariseReaction, type Reaction } from "@/lib/news/reaction";
 import { buildSignals, trendStateFrom, type Signal } from "@/lib/ta/signals";
 import type { Level, LevelSet } from "@/lib/ta/levels";
+import type { Confluence } from "@/lib/ta/trend";
+import { sessionVwap } from "@/lib/ta/vwap";
 import type { Candle } from "@/lib/ta/types";
 import { isWatched } from "@/lib/watchlist/store";
 
@@ -50,14 +52,25 @@ export type ShareDetail = {
   candles: ShareCandle[];
   /** Today's session, five minutes a bar. Empty outside market hours. */
   intraday: IntradayCandle[];
+  /**
+   * The same session as raw minutes, which is what lets several charts show
+   * several intervals from one fetch: folding is cheap and pure, so each pane
+   * does its own rather than the server sending one series per interval.
+   */
+  intradayPoints: LivePoint[];
   /** True when the price above is today's, not the last close. */
   isLive: boolean;
   /** BSE's own "as of" for the live price, e.g. "11:48". */
   liveAsOf: string | null;
   sessionHigh: number | null;
   sessionLow: number | null;
+  /** Today's volume-weighted average price. Null outside a session. */
+  sessionVwap: number | null;
   levels: LevelSet | null;
   signals: Signal[];
+  /** Daily, weekly and monthly trend side by side. Null until there is enough weekly history. */
+  confluence: Confluence | null;
+  volatility: Volatility;
   reaction: Reaction;
   news: {
     id: string;
@@ -133,6 +146,11 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
       )
     : [];
 
+  // VWAP off the minute bars rather than the five-minute ones: the weights are
+  // the same volume either way, but a finer fold puts each print closer to the
+  // price it actually traded at.
+  const vwap = session ? sessionVwap(toIntradayCandles(session.points, 1)) : null;
+
   // News and events are secondary: a share page with a chart and no headlines
   // is useful, one that fails because Google was slow is not.
   const [news, events] = [await liveNews(name), await liveEvents()];
@@ -202,6 +220,12 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
     nearestResistance: nearest(levels?.resistances, ta.close, "RESISTANCE"),
     confluence: regime.confluence,
     volatilityRegime: regime.volatility.regime,
+    volatilityTrend: regime.volatility.trend,
+    atrPercentRank: regime.volatility.atrPercentRank,
+    vwap:
+      vwap != null && vwap > 0 && livePrice != null
+        ? { price: vwap, distancePercent: ((livePrice - vwap) / vwap) * 100 }
+        : null,
   });
 
   return {
@@ -244,12 +268,16 @@ export async function getShareDetail(symbol: string): Promise<ShareDetail | null
       time: Math.floor(candle.t / 1000),
       open: candle.o, high: candle.h, low: candle.l, close: candle.c, volume: candle.v,
     })),
+    intradayPoints: (session?.points ?? []) as LivePoint[],
     isLive: livePrice != null,
     liveAsOf: session?.asOf ?? null,
     sessionHigh: session?.dayHigh ?? null,
     sessionLow: session?.dayLow ?? null,
+    sessionVwap: vwap,
     levels,
     signals,
+    confluence: regime.confluence,
+    volatility: regime.volatility,
     // The share's moves on its own heaviest-news days needed a year of stored
     // mentions to identify those days. Nothing here can reconstruct that, and
     // inventing a range from the last week would be worse than saying so.

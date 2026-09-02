@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toWeekly } from "@/lib/ta/resample";
+import { toMonthly, toWeekly } from "@/lib/ta/resample";
 import type { Candle } from "@/lib/ta/types";
 
 const DAY = 86_400_000;
@@ -46,5 +46,28 @@ describe("toWeekly", () => {
 
   it("returns nothing for no candles", () => {
     expect(toWeekly([])).toEqual([]);
+  });
+});
+
+describe("toMonthly", () => {
+  it("folds a month of weekdays into one bar", () => {
+    // January 2026 has 22 weekdays from the 5th onward, then February begins.
+    const daily = weekdays(30);
+    const monthly = toMonthly(daily);
+    expect(monthly).toHaveLength(2);
+    expect(monthly[0].o).toBe(100);
+    expect(monthly[0].l).toBe(98);
+    expect(monthly[0].h).toBe(monthly[0].c + 2);
+  });
+
+  it("keeps the newest month as a partial bar rather than dropping it", () => {
+    const daily = weekdays(23);
+    const monthly = toMonthly(daily);
+    expect(monthly).toHaveLength(2);
+    expect(monthly[1].c).toBe(daily[daily.length - 1].c);
+  });
+
+  it("returns nothing for no candles", () => {
+    expect(toMonthly([])).toEqual([]);
   });
 });

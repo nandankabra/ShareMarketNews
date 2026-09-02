@@ -2,6 +2,11 @@ import { atr } from "./atr";
 import type { Candle } from "./types";
 
 export type VolatilityRegime = "LOW" | "NORMAL" | "HIGH";
+export type VolatilityTrend = "EXPANDING" | "CONTRACTING" | "STABLE";
+
+const TREND_HORIZON = 10;
+/** Percentile points of movement before a drift counts as a change of regime. */
+const TREND_BAND = 15;
 
 /**
  * Where today's ATR% sits against its own trailing year, as a percentile
@@ -32,4 +37,25 @@ export function volatilityRegime(percentRank: number | null): VolatilityRegime |
   if (percentRank >= 75) return "HIGH";
   if (percentRank <= 25) return "LOW";
   return "NORMAL";
+}
+
+/**
+ * Which way the regime is moving: today's ATR percentile against the same
+ * measure `horizon` sessions ago. A share can sit mid-range and still be
+ * opening up fast, which the bucket on its own cannot say.
+ */
+export function volatilityTrend(
+  candles: Candle[],
+  period = 14,
+  lookback = 252,
+  horizon = TREND_HORIZON,
+): VolatilityTrend | null {
+  const now = atrPercentRank(candles, period, lookback);
+  const before = atrPercentRank(candles.slice(0, -horizon), period, lookback);
+  if (now == null || before == null) return null;
+
+  const delta = now - before;
+  if (delta >= TREND_BAND) return "EXPANDING";
+  if (delta <= -TREND_BAND) return "CONTRACTING";
+  return "STABLE";
 }

@@ -89,6 +89,10 @@ export async function GET(
       dayLow,
       asOf,
       candles,
+      // The raw minutes too, so a page showing the same share at several
+      // intervals folds them itself instead of asking for one series per
+      // chart. Six charts then cost exactly what one costs.
+      points,
       // When the cached answer was produced, so the client can show real age
       // rather than the age of its own last poll.
       at: session.at,

@@ -21,8 +21,8 @@ export function CorrelationMatrix({ correlation }: { correlation: CorrelationMat
       <CardHeader>
         <CardTitle className="text-sm">How your watchlist moves together</CardTitle>
         <CardDescription>
-          Correlation of daily returns over the last {MAX_SESSIONS} sessions — descriptive, not a diversification
-          score.
+          Correlation of daily returns over the last {MAX_SESSIONS} sessions, ordered so that shares moving
+          together sit together — descriptive, not a diversification score.
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto pt-0">
@@ -52,6 +52,30 @@ export function CorrelationMatrix({ correlation }: { correlation: CorrelationMat
             ))}
           </tbody>
         </table>
+
+        {correlation.average != null ? (
+          <p className="text-muted-foreground mt-3 text-xs">
+            Average pair {correlation.average.toFixed(2)}
+            {correlation.closest ? (
+              <>
+                {" · closest "}
+                <span className="font-mono">
+                  {correlation.closest.a}/{correlation.closest.b}
+                </span>{" "}
+                {correlation.closest.value.toFixed(2)}
+              </>
+            ) : null}
+            {correlation.loosest ? (
+              <>
+                {" · loosest "}
+                <span className="font-mono">
+                  {correlation.loosest.a}/{correlation.loosest.b}
+                </span>{" "}
+                {correlation.loosest.value.toFixed(2)}
+              </>
+            ) : null}
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

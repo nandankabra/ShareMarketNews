@@ -4,9 +4,12 @@ import { istToday } from "@/lib/date/ist";
 import { analyse } from "@/lib/live/analysis";
 import { resolveShare } from "@/lib/live/directory";
 import { liveDirectory, liveEvents, liveHistory, liveQuote } from "@/lib/live/sources";
+import { analyseRegime } from "@/lib/live/regime";
 import { correlationMatrix, type CorrelationMatrix } from "@/lib/ta/correlation";
-import { periodReturn, rankRelativeStrength } from "@/lib/ta/relative-strength";
+import { compositeRelativeStrength, periodReturn, rankRelativeStrength } from "@/lib/ta/relative-strength";
+import type { Confluence } from "@/lib/ta/trend";
 import type { Candle } from "@/lib/ta/types";
+import type { VolatilityRegime } from "@/lib/ta/volatility";
 import { readWatchlist } from "@/lib/watchlist/store";
 
 export type WatchlistRow = {
@@ -29,6 +32,14 @@ export type WatchlistRow = {
   returnPercent20d: number | null;
   /** Where that 20-day return ranks within this watchlist, 0-100. Null alone. */
   rsPercentile: number | null;
+  /** Return per relative-strength window, keyed by sessions. */
+  rsReturns: Record<number, number | null>;
+  /** The 5/20/60-day ranks averaged into one within-list score, 0-100. */
+  rsComposite: number | null;
+  /** How much the daily, weekly and monthly trends agree, -100 to +100. */
+  confluenceScore: number | null;
+  confluenceAlignment: Confluence["alignment"] | null;
+  volatilityRegime: VolatilityRegime | null;
 };
 
 export type WatchlistView = {
@@ -69,6 +80,9 @@ export async function listWatchlist(): Promise<WatchlistView> {
       : [];
 
     const ta = analyse(candles);
+    // The same three-timeframe read the share page shows, over bars this row
+    // has already paid for.
+    const regime = analyseRegime(candles);
     const lastBar = history.ok ? history.data.at(-1) : undefined;
     const closes = candles.map((candle) => candle.c);
     if (closes.length > 0) closesBySymbol.push({ symbol: entry.symbol, closes });
@@ -110,7 +124,14 @@ export async function listWatchlist(): Promise<WatchlistView> {
       newsCount: 0,
       nextEvent: nextEvent ? { eventDate: nextEvent.eventDate, type: nextEvent.type } : null,
       returnPercent20d: periodReturn(closes, 20),
-      rsPercentile: null, // filled in below, once every row's return is known
+      // All four are filled in below, once every row's history is known — a
+      // rank is a statement about the group, not about the row.
+      rsPercentile: null,
+      rsReturns: {},
+      rsComposite: null,
+      confluenceScore: regime.confluence?.score ?? null,
+      confluenceAlignment: regime.confluence?.alignment ?? null,
+      volatilityRegime: regime.volatility.regime,
     });
   }
 
@@ -120,7 +141,15 @@ export async function listWatchlist(): Promise<WatchlistView> {
       .map((row) => ({ symbol: row.symbol, returnPercent: row.returnPercent20d })),
   );
   const percentileBySymbol = new Map(ranked.map((row) => [row.symbol, row.percentile]));
-  for (const row of rows) row.rsPercentile = percentileBySymbol.get(row.symbol) ?? null;
+  const compositeBySymbol = new Map(
+    compositeRelativeStrength(closesBySymbol).map((entry) => [entry.symbol, entry]),
+  );
+  for (const row of rows) {
+    row.rsPercentile = percentileBySymbol.get(row.symbol) ?? null;
+    const composite = compositeBySymbol.get(row.symbol);
+    row.rsReturns = composite?.returns ?? {};
+    row.rsComposite = composite?.score ?? null;
+  }
 
   const correlation = closesBySymbol.length >= 2 ? correlationMatrix(closesBySymbol) : null;
 

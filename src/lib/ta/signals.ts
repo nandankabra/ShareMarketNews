@@ -1,7 +1,8 @@
 import type { TrendState } from "@/lib/db/enums";
 
 import type { Level } from "./levels";
-import type { VolatilityRegime } from "./volatility";
+import type { Confluence, TimeframeTrend } from "./trend";
+import type { VolatilityRegime, VolatilityTrend } from "./volatility";
 
 /**
  * Turn indicator numbers into statements a person can act on.
@@ -40,9 +41,18 @@ export type SignalInput = {
   crossDirection: "GOLDEN" | "DEATH" | null;
   nearestSupport: Level | null;
   nearestResistance: Level | null;
-  /** Daily trend vs. weekly trend; null when there isn't enough weekly history yet. */
-  confluence: { daily: "UP" | "DOWN" | "FLAT"; weekly: "UP" | "DOWN" | "FLAT"; aligned: boolean } | null;
+  /** Daily, weekly and monthly trend together; null when there isn't enough weekly history yet. */
+  confluence: Confluence | null;
   volatilityRegime: VolatilityRegime | null;
+  volatilityTrend: VolatilityTrend | null;
+  atrPercentRank: number | null;
+  /**
+   * Today's volume-weighted average price and how far the *live* price sits
+   * from it. The distance is passed in rather than derived from `close`,
+   * because `close` is the last daily bar — yesterday's number measured
+   * against today's VWAP would be a comparison of two different days.
+   */
+  vwap: { price: number; distancePercent: number } | null;
 };
 
 export function trendStateFrom(close: number | null, sma200: number | null): TrendState {
@@ -123,23 +133,102 @@ export function buildSignals(input: SignalInput): Signal[] {
   }
 
   if (input.confluence) {
-    const { daily, weekly, aligned } = input.confluence;
-    if (aligned && daily === "UP") {
-      push("CONFLUENCE_ALIGNED_UP", "Daily and weekly trend both up", "GOOD", true);
-    } else if (aligned && daily === "DOWN") {
-      push("CONFLUENCE_ALIGNED_DOWN", "Daily and weekly trend both down", "BAD", true);
-    } else if (daily !== weekly) {
-      push("CONFLUENCE_MIXED", `Daily trend ${daily.toLowerCase()}, weekly ${weekly.toLowerCase()}`, "NEUTRAL");
+    const { alignment, direction, timeframes, score } = input.confluence;
+    const suffix = ` — confluence ${signed(score)}`;
+    const agreeing = timeframes.filter((timeframe) => timeframe.direction === direction);
+    const flat = timeframes.filter((timeframe) => timeframe.direction === "FLAT");
+    const word = direction === "UP" ? "up" : "down";
+
+    if (alignment === "FULL") {
+      push(
+        direction === "UP" ? "CONFLUENCE_ALIGNED_UP" : "CONFLUENCE_ALIGNED_DOWN",
+        `${sentence(listOf(timeframes))} all trending ${word}${suffix}`,
+        direction === "UP" ? "GOOD" : "BAD",
+        true,
+      );
+    } else if (alignment === "MAJORITY") {
+      push(
+        "CONFLUENCE_MAJORITY",
+        `${sentence(listOf(agreeing))} ${word}, ${listOf(flat)} flat${suffix}`,
+        direction === "UP" ? "GOOD" : "BAD",
+        true,
+      );
+    } else if (alignment === "MIXED") {
+      push(
+        "CONFLUENCE_MIXED",
+        `${sentence(timeframes.map((timeframe) => `${timeframe.label} ${timeframe.direction.toLowerCase()}`).join(", "))}${suffix}`,
+        "NEUTRAL",
+      );
+    } else {
+      push("CONFLUENCE_NONE", `No trend on the ${listOf(timeframes)}`, "NEUTRAL");
+    }
+
+    // Price on one side of an average that is heading the other way: the move
+    // is happening without the trend behind it yet, either way round.
+    const daily = timeframes.find((timeframe) => timeframe.label === "daily");
+    if (daily && daily.direction !== "FLAT" && daily.slope != null && daily.slope !== "FLAT" && daily.slope !== daily.direction) {
+      push(
+        "TREND_MA_DIVERGES",
+        daily.direction === "UP"
+          ? "Above the 50-day, but the average itself is still falling"
+          : "Below the 50-day, but the average itself is turning up",
+        "WATCH",
+        true,
+      );
     }
   }
 
-  if (input.volatilityRegime === "HIGH") {
-    push("VOLATILITY_HIGH", "ATR near a 1-year high for this share — a wide-swing regime", "WATCH", true);
-  } else if (input.volatilityRegime === "LOW") {
-    push("VOLATILITY_LOW", "ATR near a 1-year low for this share — a tight-range regime", "WATCH", true);
+  // The regime bucket says where volatility sits; the trend says where it is
+  // going. Said together they are one sentence, not two chips.
+  if (input.volatilityRegime && input.atrPercentRank != null) {
+    const drift =
+      input.volatilityTrend === "EXPANDING"
+        ? " and still widening"
+        : input.volatilityTrend === "CONTRACTING"
+          ? " and narrowing"
+          : "";
+
+    if (input.volatilityRegime === "HIGH") {
+      const top = Math.max(1, Math.round(100 - input.atrPercentRank));
+      push("VOLATILITY_HIGH", `ATR in the top ${top}% of its own year — a wide-swing regime${drift}`, "WATCH", true);
+    } else if (input.volatilityRegime === "LOW") {
+      const bottom = Math.max(1, Math.round(input.atrPercentRank));
+      push("VOLATILITY_LOW", `ATR in the bottom ${bottom}% of its own year — a tight-range regime${drift}`, "WATCH", true);
+    } else if (drift) {
+      push("VOLATILITY_SHIFTING", `ATR mid-range for its own year${drift}`, "WATCH", true);
+    }
+  }
+
+  // Where the price sits against the price the day's volume actually happened
+  // at. Only meaningful while a session is running, which is the only time
+  // `sessionVwap` is set.
+  if (input.vwap) {
+    const { price, distancePercent } = input.vwap;
+    push(
+      distancePercent >= 0 ? "VWAP_ABOVE" : "VWAP_BELOW",
+      `${Math.abs(distancePercent).toFixed(1)}% ${distancePercent >= 0 ? "above" : "below"} today's VWAP of ₹${round(price)}`,
+      "NEUTRAL",
+      Math.abs(distancePercent) >= 1,
+    );
   }
 
   return out;
+}
+
+/** "daily, weekly and monthly" — the Oxford-less join a sentence wants. */
+function listOf(timeframes: TimeframeTrend[]): string {
+  const labels = timeframes.map((timeframe) => timeframe.label);
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+function sentence(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function signed(value: number): string {
+  const rounded = Math.round(value);
+  return rounded > 0 ? `+${rounded}` : `${rounded}`;
 }
 
 function round(value: number): string {

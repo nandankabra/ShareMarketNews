@@ -48,13 +48,59 @@ describe("correlationMatrix", () => {
     expect(result.matrix[0][1]).toBeCloseTo(result.matrix[1][0]!, 10);
   });
 
-  it("preserves symbol order", () => {
+  it("seats shares that move together next to each other", () => {
+    const base = baseSeries(80, 1);
     const result = correlationMatrix([
-      { symbol: "A", closes: baseSeries(80, 1) },
-      { symbol: "B", closes: baseSeries(80, 2) },
-      { symbol: "C", closes: baseSeries(80, 3) },
+      { symbol: "A", closes: base },
+      { symbol: "C", closes: baseSeries(80, 31) },
+      // Same path at twice the price: identical returns, so a perfect pair
+      // with A however far apart they were handed in.
+      { symbol: "B", closes: base.map((value) => value * 2) },
     ]);
-    expect(result.symbols).toEqual(["A", "B", "C"]);
+
+    const a = result.symbols.indexOf("A");
+    const b = result.symbols.indexOf("B");
+    expect(Math.abs(a - b)).toBe(1);
     expect(result.matrix).toHaveLength(3);
+  });
+
+  it("keeps every cell with the pair it belongs to after reordering", () => {
+    const base = baseSeries(80, 1);
+    const result = correlationMatrix([
+      { symbol: "A", closes: base },
+      { symbol: "C", closes: baseSeries(80, 31) },
+      { symbol: "B", closes: base.map((value) => value * 2) },
+    ]);
+
+    const a = result.symbols.indexOf("A");
+    const b = result.symbols.indexOf("B");
+    expect(result.matrix[a][b]).toBeCloseTo(1, 5);
+    expect(result.matrix[a][a]).toBe(1);
+    expect(result.matrix[a][b]).toBeCloseTo(result.matrix[b][a]!, 10);
+  });
+
+  it("summarises the pairs it could measure", () => {
+    const base = baseSeries(80, 1);
+    const result = correlationMatrix([
+      { symbol: "A", closes: base },
+      { symbol: "C", closes: baseSeries(80, 31) },
+      { symbol: "B", closes: base.map((value) => value * 2) },
+    ]);
+
+    expect(result.closest).not.toBeNull();
+    expect(result.closest!.value).toBeCloseTo(1, 5);
+    expect([result.closest!.a, result.closest!.b].sort()).toEqual(["A", "B"]);
+    expect(result.loosest!.value).toBeLessThan(result.closest!.value);
+    expect(result.average).not.toBeNull();
+    expect(result.average!).toBeLessThanOrEqual(1);
+  });
+
+  it("has nothing to summarise when no pair can be measured", () => {
+    const result = correlationMatrix([
+      { symbol: "A", closes: [100, 101, 102] },
+      { symbol: "B", closes: [100, 99, 98] },
+    ]);
+    expect(result.average).toBeNull();
+    expect(result.closest).toBeNull();
   });
 });

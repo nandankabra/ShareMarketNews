@@ -6,19 +6,21 @@ import { ArrowLeft, Star } from "lucide-react";
 import { PageHeader, PageShell } from "@/components/layout/page-header";
 import { ChangePill } from "@/components/market/change-pill";
 import { DayRangeBar } from "@/components/market/day-range-bar";
+import { IntradayGrid } from "@/components/shares/intraday-grid";
 import { LiveChart } from "@/components/shares/live-chart";
 import { LivePrice } from "@/components/shares/live-price";
 import { LiveSessionProvider } from "@/components/shares/live-session";
 import { NewsList } from "@/components/shares/news-list";
 import { ReactionPanel } from "@/components/shares/reaction-panel";
 import { SignalList } from "@/components/shares/signal-list";
+import { TimeframePanel } from "@/components/shares/timeframe-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { isLikelyMarketOpen } from "@/lib/date/ist";
 import { serverNow } from "@/lib/server-now";
 import { getShareDetail } from "@/lib/services/shares/queries";
 import type { Level } from "@/lib/ta/levels";
-import { cn, formatCompact, formatInr, relativeTime } from "@/lib/utils";
+import { cn, formatCompact, formatInr, formatPercent, relativeTime } from "@/lib/utils";
 
 /**
  * Vercel defaults server functions to ten seconds. On a cold cache this page
@@ -65,6 +67,19 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
 
   const stats = [
     { label: "Prev close", value: formatInr(share.previousClose) },
+    // Only while there is a session behind it: a VWAP with no volume to weight
+    // is yesterday's number wearing today's label.
+    ...(share.sessionVwap != null
+      ? [
+          {
+            label: "VWAP",
+            value:
+              share.lastPrice != null
+                ? `${formatInr(share.sessionVwap)} (${formatPercent(((share.lastPrice - share.sessionVwap) / share.sessionVwap) * 100, 1)})`
+                : formatInr(share.sessionVwap),
+          },
+        ]
+      : []),
     { label: "Day range", value: share.dayLow != null && share.dayHigh != null ? `${formatInr(share.dayLow)} – ${formatInr(share.dayHigh)}` : "—" },
     { label: "52-week", value: share.week52Low != null && share.week52High != null ? `${formatInr(share.week52Low)} – ${formatInr(share.week52High)}` : "—" },
     {
@@ -152,12 +167,20 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
           <LiveChart candles={share.candles} intraday={share.intraday} levels={share.levels} />
         </Card>
 
+
         <div className="flex flex-col gap-3">
           <Card className="p-4">
             <h2 className="text-muted-foreground mb-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
               Read-out
             </h2>
             <SignalList signals={share.signals} />
+          </Card>
+
+          <Card className="p-4">
+            <h2 className="text-muted-foreground mb-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
+              Timeframes
+            </h2>
+            <TimeframePanel confluence={share.confluence} volatility={share.volatility} />
           </Card>
 
           <ReactionPanel
@@ -168,6 +191,19 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
           />
         </div>
       </div>
+
+      {share.intradayPoints.length > 0 ? (
+        <Card className="mt-3 p-4">
+          <h2 className="text-muted-foreground mb-2 font-mono text-[10.5px] font-semibold tracking-[0.13em] uppercase">
+            Live grid
+          </h2>
+          <IntradayGrid
+            symbol={share.symbol}
+            initialPoints={share.intradayPoints}
+            initialLastPrice={share.lastPrice}
+          />
+        </Card>
+      ) : null}
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
         <Card className="p-4">

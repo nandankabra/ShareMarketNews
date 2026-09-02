@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { LivePoint } from "@/lib/live/intraday";
 import type { IntradayCandle } from "@/lib/services/shares/queries";
 
 export type LiveSession = {
@@ -13,6 +14,8 @@ export type LiveSession = {
   dayLow: number | null;
   asOf: string | null;
   candles: IntradayCandle[];
+  /** The session as raw minutes, for panes that fold their own interval. */
+  points: LivePoint[];
   at: number;
 };
 

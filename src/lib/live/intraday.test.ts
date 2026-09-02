@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyLivePrice, toIntradayCandles } from "./intraday";
+import { applyLivePrice, toIntradayCandles, INTRADAY_INTERVALS } from "./intraday";
 import type { IntradayPoint } from "@/lib/providers/bse/parse-intraday";
 
 /** 09:15:00 IST on an arbitrary day, as epoch ms. */
@@ -69,6 +69,59 @@ describe("toIntradayCandles", () => {
     const candles = toIntradayCandles(points, 5);
     expect(candles[0].l).toBe(90);
     expect(candles[1].h).toBe(130);
+  });
+});
+
+describe("folding the same session at several intervals", () => {
+  // A full session's worth of minutes with a shape to them, so extremes land
+  // inside buckets rather than on their edges.
+  const points = Array.from({ length: 375 }, (_, i) =>
+    minute(i, 100 + Math.sin(i / 7) * 5 + i * 0.01, 10 + (i % 5)),
+  );
+
+  it("keeps every interval a view of the same session", () => {
+    const totalVolume = points.reduce((sum, point) => sum + (point.volume ?? 0), 0);
+
+    for (const minutes of INTRADAY_INTERVALS) {
+      const candles = toIntradayCandles(points, minutes);
+      expect(candles.length).toBeGreaterThan(0);
+      // Same first open, same last close, same volume — only the grouping differs.
+      expect(candles[0].o).toBe(points[0].price);
+      expect(candles.at(-1)!.c).toBe(points.at(-1)!.price);
+      expect(candles.reduce((sum, candle) => sum + (candle.v ?? 0), 0)).toBe(totalVolume);
+    }
+  });
+
+  it("nests coarser bars over finer ones", () => {
+    const fine = toIntradayCandles(points, 5);
+    const coarse = toIntradayCandles(points, 15);
+
+    for (const bar of coarse) {
+      const inside = fine.filter((candle) => candle.t >= bar.t && candle.t < bar.t + 15 * 60_000);
+      expect(inside.length).toBeGreaterThan(0);
+      expect(bar.h).toBe(Math.max(...inside.map((candle) => candle.h)));
+      expect(bar.l).toBe(Math.min(...inside.map((candle) => candle.l)));
+      expect(bar.o).toBe(inside[0].o);
+      expect(bar.c).toBe(inside.at(-1)!.c);
+    }
+  });
+
+  it("gives more bars the finer the interval", () => {
+    const counts = INTRADAY_INTERVALS.map((minutes) => toIntradayCandles(points, minutes).length);
+    for (let i = 1; i < counts.length; i++) {
+      expect(counts[i]).toBeLessThanOrEqual(counts[i - 1]);
+    }
+  });
+
+  it("makes a settled one-minute bar a single print, with no body", () => {
+    const candles = toIntradayCandles(points, 1);
+    expect(candles).toHaveLength(points.length);
+    // One price a minute is all the upstream publishes, so O=H=L=C until the
+    // live price is folded into the bar still forming.
+    expect(candles.every((candle) => candle.o === candle.c && candle.h === candle.l)).toBe(true);
+
+    const withLive = applyLivePrice(candles, candles.at(-1)!.c + 3, points.at(-1)!.at, 1);
+    expect(withLive.at(-1)!.h).toBeGreaterThan(withLive.at(-1)!.l);
   });
 });
 

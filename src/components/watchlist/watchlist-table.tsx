@@ -18,6 +18,28 @@ const EVENT_LABEL: Record<string, string> = {
   SPLIT: "SPLIT", RIGHTS: "RIGHTS", BUYBACK: "BUYBACK", AGM: "AGM", OTHER: "EVENT",
 };
 
+const ALIGNMENT_LABEL: Record<string, string> = {
+  FULL: "Every timeframe agrees",
+  MAJORITY: "The timeframes that trend agree",
+  MIXED: "The timeframes disagree",
+  NONE: "Nothing is trending",
+};
+
+const VOLATILITY_LABEL: Record<string, string> = {
+  HIGH: "wide-swing regime",
+  LOW: "tight-range regime",
+  NORMAL: "ordinary volatility",
+};
+
+/** The windows behind the composite rank, so the number can be checked. */
+function rsTitle(row: WatchlistRow): string | undefined {
+  const parts = Object.entries(row.rsReturns)
+    .filter(([, value]) => value != null)
+    .map(([days, value]) => `${days}d ${formatPercent(value as number, 1)}`);
+  if (parts.length === 0) return undefined;
+  return `${parts.join(" · ")} — ranked within this watchlist`;
+}
+
 export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: number }) {
   const [pending, startTransition] = useTransition();
   const [editing, setEditing] = useState<string | null>(null);
@@ -49,7 +71,8 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
           <TableHead className="text-right whitespace-nowrap">Since added</TableHead>
           <TableHead className="hidden lg:table-cell">30-day</TableHead>
           <TableHead className="hidden text-right md:table-cell">RSI</TableHead>
-          <TableHead className="hidden text-right whitespace-nowrap lg:table-cell">20d RS</TableHead>
+          <TableHead className="hidden text-right whitespace-nowrap lg:table-cell">RS</TableHead>
+          <TableHead className="hidden text-right whitespace-nowrap lg:table-cell">Trend</TableHead>
           <TableHead className="hidden sm:table-cell">Flags</TableHead>
           <TableHead className="w-8" aria-label="Remove" />
         </TableRow>
@@ -150,18 +173,45 @@ export function WatchlistTable({ rows, now }: { rows: WatchlistRow[]; now: numbe
               )}
             </TableCell>
 
+            {/* The composite rank, with the windows it was built from in the
+                title — one number to scan the column by, the working behind it
+                for when a number looks wrong. */}
             <TableCell
               className="tabular hidden text-right font-mono text-xs lg:table-cell"
-              title={row.rsPercentile != null ? `Ranks ${row.rsPercentile.toFixed(0)}th percentile in this watchlist` : undefined}
+              title={rsTitle(row)}
             >
-              {row.returnPercent20d != null ? (
+              {row.rsComposite != null ? (
                 <span
                   className={cn(
-                    row.rsPercentile != null && row.rsPercentile >= 67 && "text-up",
-                    row.rsPercentile != null && row.rsPercentile <= 33 && "text-down",
+                    row.rsComposite >= 67 && "text-up",
+                    row.rsComposite <= 33 && "text-down",
                   )}
                 >
-                  {formatPercent(row.returnPercent20d)}
+                  {row.rsComposite.toFixed(0)}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </TableCell>
+
+            <TableCell
+              className="tabular hidden text-right font-mono text-xs lg:table-cell"
+              title={
+                row.confluenceAlignment
+                  ? `${ALIGNMENT_LABEL[row.confluenceAlignment]}${row.volatilityRegime ? ` · ${VOLATILITY_LABEL[row.volatilityRegime]}` : ""}`
+                  : undefined
+              }
+            >
+              {row.confluenceScore != null ? (
+                <span
+                  className={cn(
+                    row.confluenceScore > 0 && "text-up",
+                    row.confluenceScore < 0 && "text-down",
+                    row.confluenceScore === 0 && "text-muted-foreground",
+                  )}
+                >
+                  {row.confluenceScore > 0 ? "+" : ""}
+                  {row.confluenceScore.toFixed(0)}
                 </span>
               ) : (
                 <span className="text-muted-foreground">—</span>
