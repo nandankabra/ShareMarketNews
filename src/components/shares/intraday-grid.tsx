@@ -79,13 +79,21 @@ export function IntradayGrid({
   symbol,
   initialPoints,
   initialLastPrice,
+  previousClose,
   levels,
   pivots,
 }: {
   symbol: string;
   initialPoints: LivePoint[];
   initialLastPrice: number | null;
-  /** The daily supports and resistances, drawn on the minute charts too — they are the same levels. */
+  /** Yesterday's close, the reference every pane here is read against. */
+  previousClose: number | null;
+  /**
+   * The daily supports and resistances. Passed through for the day the panes
+   * can show a wider scale; the intraday charts themselves no longer draw them,
+   * because six dashed lines measured on daily bars said nothing about a
+   * one-minute pane and covered the candles that did.
+   */
   levels: LevelSet | null;
   /** Yesterday's pivots: every pane here is intraday, whatever its interval. */
   pivots: PivotLevels | null;
@@ -228,6 +236,7 @@ export function IntradayGrid({
               intraday={series.get(pane.minutes) ?? []}
               levels={levels}
               pivots={pivots}
+              previousClose={session?.previousClose ?? previousClose}
             />
           </div>
         ))}

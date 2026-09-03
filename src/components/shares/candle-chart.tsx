@@ -23,6 +23,8 @@ import { rsi } from "@/lib/ta/rsi";
 import { cn } from "@/lib/utils";
 
 const INDICATOR_PANE_HEIGHT = 90;
+/** Widest a five-minute candle gets before a thin session looks like a bar chart. */
+const MAX_INTRADAY_BAR_SPACING = 12;
 /** The moving average drawn over the volume histogram, as brokers label it. */
 const VOLUME_AVG_PERIOD = 9;
 /** Connors RSI's three periods: price RSI, streak RSI, and the return-rank window. */
@@ -123,6 +125,7 @@ export function CandleChart({
   intraday = [],
   levels,
   pivots = null,
+  previousClose = null,
   className,
   /**
    * "intraday" is the grid pane: one interval, no range switcher, shorter.
@@ -137,6 +140,8 @@ export function CandleChart({
   levels: LevelSet | null;
   /** Previous-period pivots for this scale. Drawn only when the setting asks. */
   pivots?: PivotLevels | null;
+  /** Yesterday's close, drawn as the intraday reference line. */
+  previousClose?: number | null;
   className?: string;
   mode?: "full" | "intraday";
   intervalLabel?: string;
@@ -233,6 +238,15 @@ export function CandleChart({
     const up = dark ? "#3FBF86" : "#1B7D50";
     const down = dark ? "#E8705C" : "#B33A2A";
     const accent = dark ? "#F0AE4B" : "#B8721A";
+    // VWAP was violet, which sat ΔE 11.5 from the down-red under normal vision
+    // — two lines a full-colour reader has to work to tell apart. Blue clears
+    // both candle colours in either theme.
+    const vwapColor = dark ? "#7AB3F5" : "#2A78D6";
+    // The previous close, and the crosshair, are references rather than data:
+    // muted ink, so they sit behind the candles instead of competing with them.
+    const reference = dark ? "rgba(255,255,255,0.30)" : "rgba(0,0,0,0.28)";
+    const crosshair = dark ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.26)";
+    const label = dark ? "#3A4048" : "#4A4640";
 
     const chart = createChart(container, {
       layout: {
@@ -242,11 +256,23 @@ export function CandleChart({
         fontSize: 10,
         attributionLogo: false,
       },
-      grid: { vertLines: { color: grid }, horzLines: { color: grid } },
-      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.28 } },
+      // Horizontal rules only. Vertical ones lay a second grid over the
+      // candles for the eye to read past, and the time axis already marks the
+      // same positions along the bottom.
+      grid: { vertLines: { visible: false }, horzLines: { color: grid } },
+      // The intraday chart gives the price more of the pane: its volume band
+      // is slimmer than the daily chart's, so the candles get the difference.
+      rightPriceScale: {
+        borderVisible: false,
+        scaleMargins: { top: 0.08, bottom: isIntraday ? 0.18 : 0.28 },
+      },
       // Intraday bars need a clock on the axis; daily bars only need a date.
       timeScale: { borderVisible: false, timeVisible: isIntraday, secondsVisible: false },
-      crosshair: { mode: 1 },
+      crosshair: {
+        mode: 1,
+        vertLine: { color: crosshair, width: 1, style: 2, labelBackgroundColor: label },
+        horzLine: { color: crosshair, width: 1, style: 2, labelBackgroundColor: label },
+      },
       handleScale: { axisPressedMouseMove: { time: true, price: false } },
       autoSize: true,
     });
@@ -254,13 +280,25 @@ export function CandleChart({
 
     colorsRef.current = { up, down };
 
+    // Up candles hollow, down candles filled.
+    //
+    // Green against red is ΔE 5 under deuteranopia — for a red-green colour
+    // blind reader the two are the same mark. The fill carries the direction
+    // as well as the hue does, so the chart still reads with the colour
+    // removed, and the convention everyone else expects is left intact.
     const candleSeries: ISeriesApi<"Candlestick"> = chart.addSeries(CandlestickSeries, {
-      upColor: up,
+      upColor: "transparent",
       downColor: down,
       borderUpColor: up,
       borderDownColor: down,
       wickUpColor: up,
       wickDownColor: down,
+      // The traded price, carried across to the axis. On a live session this is
+      // the line the eye actually follows.
+      priceLineVisible: true,
+      priceLineWidth: 1,
+      priceLineStyle: 2,
+      priceLineColor: accent,
     });
     // Heikin Ashi is a display transform: the bodies change, the underlying
     // prices do not. Indicators below stay on the real closes on purpose — an
@@ -283,7 +321,9 @@ export function CandleChart({
       priceFormat: { type: "volume" },
       priceScaleId: "volume",
     });
-    chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    chart
+      .priceScale("volume")
+      .applyOptions({ scaleMargins: { top: isIntraday ? 0.86 : 0.78, bottom: 0 } });
     candleRef.current = candleSeries;
     volumeRef.current = volumeSeries;
     drawnRef.current = visible;
@@ -291,7 +331,7 @@ export function CandleChart({
       visible.map((candle) => ({
         time: candle.time,
         value: candle.volume ?? 0,
-        color: candle.close >= candle.open ? `${up}55` : `${down}55`,
+        color: candle.close >= candle.open ? `${up}40` : `${down}40`,
       })),
     );
 
@@ -318,11 +358,15 @@ export function CandleChart({
     // trading and say nothing about today, so the intraday chart uses periods
     // scaled to its own bars: 9 and 21 five-minute candles, a little under an
     // hour and just under two.
+    // The intraday chart draws no moving averages at all.
+    //
+    // A 9- and a 21-period average over five-minute bars are two more lines
+    // tracking the same forty candles the price already draws, on a canvas a
+    // fraction of the daily chart's height — and VWAP, which is the reference
+    // an intraday trader actually reads against, was competing with both. On
+    // the daily chart the 20 and 50 span real weeks and stay.
     const overlays: Array<{ period: number; color: string; width: 1 | 2 }> = isIntraday
-      ? [
-          { period: 9, color: accent, width: 2 },
-          { period: 21, color: dark ? "#7FA3C4" : "#5B7A99", width: 1 },
-        ]
+      ? []
       : [
           { period: 20, color: accent, width: 2 },
           { period: 50, color: dark ? "#7FA3C4" : "#5B7A99", width: 1 },
@@ -350,11 +394,15 @@ export function CandleChart({
     // daily chart would average a year of volume into one meaningless line.
     if (isIntraday) {
       const vwap = chart.addSeries(LineSeries, {
-        color: dark ? "#C08BD6" : "#7A4A99",
+        color: vwapColor,
         lineWidth: 2,
-        lineStyle: 1,
+        // Solid now that it is the only overlay on the pane. It was dotted to
+        // stay out of the way of two moving averages that are no longer there.
+        lineStyle: 0,
         priceLineVisible: false,
-        lastValueVisible: true,
+        // Off: its label landed on top of the traded price's, and the figure is
+        // already in the VWAP tile above the chart.
+        lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
       const values = vwapSeries(visible);
@@ -364,6 +412,20 @@ export function CandleChart({
           .filter((point): point is { time: UTCTimestamp; value: number } => point.value != null),
       );
       vwapRef.current = vwap;
+    }
+
+    // Yesterday's close, which is the line every intraday move is quoted
+    // against — "up 0.6%" means up 0.6% from here. The chart showed the
+    // percentage in the header and not the line it referred to.
+    if (isIntraday && previousClose != null) {
+      candleSeries.createPriceLine({
+        price: previousClose,
+        color: reference,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "PC",
+      });
     }
 
     // Indicators go in panes of their own, below the price, in the order they
@@ -456,7 +518,7 @@ export function CandleChart({
 
     // Floor-trader pivots from the previous period: the pivot itself solid,
     // its five levels either side dashed and fainter the further out they go.
-    if (showPivots && pivots) {
+    if (showPivots && pivots && !isIntraday) {
       candleSeries.createPriceLine({
         price: pivots.p,
         color: accent,
@@ -490,8 +552,12 @@ export function CandleChart({
     // Support and resistance as price lines on the candle series, labelled with
     // how many times each was tested — a line without its strength is just a
     // line someone drew.
-    const spot = visible.at(-1)?.close ?? null;
-    for (const level of nearestLevels(levels?.resistances, spot, levelCount)) {
+    // Support and resistance are computed from daily bars, so they belong to
+    // the daily chart. Six dashed lines across one session was the single
+    // biggest source of clutter on the intraday pane, and none of them was
+    // measured at this timescale.
+    const spot = isIntraday ? null : visible.at(-1)?.close ?? null;
+    for (const level of isIntraday ? [] : nearestLevels(levels?.resistances, spot, levelCount)) {
       candleSeries.createPriceLine({
         price: level.price,
         color: down,
@@ -501,7 +567,7 @@ export function CandleChart({
         title: `R ${level.touches}×`,
       });
     }
-    for (const level of nearestLevels(levels?.supports, spot, levelCount)) {
+    for (const level of isIntraday ? [] : nearestLevels(levels?.supports, spot, levelCount)) {
       candleSeries.createPriceLine({
         price: level.price,
         color: up,
@@ -512,7 +578,27 @@ export function CandleChart({
       });
     }
 
-    chart.timeScale().fitContent();
+    // Early in a session there are only a handful of five-minute bars, and
+    // fitContent spreads them across the full width — candles as wide as a
+    // finger, which reads as a bar chart of something else. While the session
+    // is too thin to fill the pane, pin the bars to a normal width and let it
+    // grow in from the left the way a broker's does; once there are enough to
+    // fill it, fitContent is right again.
+    //
+    // Asking the time scale for its barSpacing does not answer this: it returns
+    // the configured value, not the width fitContent actually produced.
+    const scale = chart.timeScale();
+    const slots = Math.floor(container.clientWidth / MAX_INTRADAY_BAR_SPACING);
+    if (isIntraday && visible.length < slots) {
+      // Anchor bar zero to the left edge and show a full pane's worth of slots,
+      // so the morning's candles keep a normal width and the empty afternoon
+      // sits to the right of them. Setting barSpacing alone does not do this —
+      // it resizes the bars but leaves the viewport wherever it was, which
+      // strands a thin session in the middle of the pane.
+      scale.setVisibleLogicalRange({ from: -1, to: slots });
+    } else {
+      scale.fitContent();
+    }
 
     return () => {
       // Every range change tears down and rebuilds. Without this the canvases
@@ -528,7 +614,7 @@ export function CandleChart({
       volumeAvgRef.current = null;
       drawnRef.current = [];
     };
-  }, [rebuildKey, levels, pivots, resolvedTheme, isIntraday, candleType, showRsi, rsiPeriod, rsiSignal, showCrsi, showPivots, volumeAvg, levelCount]);
+  }, [rebuildKey, levels, pivots, previousClose, resolvedTheme, isIntraday, candleType, showRsi, rsiPeriod, rsiSignal, showCrsi, showPivots, volumeAvg, levelCount]);
 
   /**
    * Apply a live update without rebuilding.
@@ -621,7 +707,7 @@ export function CandleChart({
       volume.update({
         time: visible[i].time,
         value: visible[i].volume ?? 0,
-        color: visible[i].close >= visible[i].open ? `${up}55` : `${down}55`,
+        color: visible[i].close >= visible[i].open ? `${up}40` : `${down}40`,
       });
     }
 
@@ -659,23 +745,41 @@ export function CandleChart({
               Heikin Ashi
             </span>
           ) : null}
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <i className="bg-primary block h-0.5 w-3 rounded-full" aria-hidden /> SMA {isIntraday ? 9 : 20}
-          </span>
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <i className="block h-0.5 w-3 rounded-full bg-[#5B7A99] dark:bg-[#7FA3C4]" aria-hidden /> SMA {isIntraday ? 21 : 50}
-          </span>
+          {/* The legend names what is actually drawn. The intraday chart has
+              one overlay and one reference; the daily chart has its averages
+              and its levels. Listing both sets on both was how a reader ended
+              up looking for a support line that was never there. */}
           {isIntraday ? (
-            <span className="text-muted-foreground flex items-center gap-1.5">
-              <i className="block h-0.5 w-3 rounded-full bg-[#7A4A99] dark:bg-[#C08BD6]" aria-hidden /> VWAP
-            </span>
-          ) : null}
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <i className="bg-down block h-0.5 w-3 rounded-full" aria-hidden /> Resistance
-          </span>
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <i className="bg-up block h-0.5 w-3 rounded-full" aria-hidden /> Support
-          </span>
+            <>
+              <span className="text-muted-foreground flex items-center gap-1.5">
+                <i className="block h-0.5 w-3 rounded-full bg-[#2A78D6] dark:bg-[#7AB3F5]" aria-hidden /> VWAP
+              </span>
+              {previousClose != null ? (
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <i className="block h-0.5 w-3 rounded-full bg-current opacity-40" aria-hidden /> Prev close
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <span className="text-muted-foreground flex items-center gap-1.5">
+                <i className="bg-primary block h-0.5 w-3 rounded-full" aria-hidden /> SMA 20
+              </span>
+              <span className="text-muted-foreground flex items-center gap-1.5">
+                <i className="block h-0.5 w-3 rounded-full bg-[#5B7A99] dark:bg-[#7FA3C4]" aria-hidden /> SMA 50
+              </span>
+              {levelCount > 0 ? (
+                <>
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <i className="bg-down block h-0.5 w-3 rounded-full" aria-hidden /> Resistance
+                  </span>
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <i className="bg-up block h-0.5 w-3 rounded-full" aria-hidden /> Support
+                  </span>
+                </>
+              ) : null}
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {showRsi ? (

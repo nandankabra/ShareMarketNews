@@ -36,6 +36,7 @@ export function LiveChart({
   intraday,
   points,
   initialLastPrice,
+  previousClose,
   levels,
   pivots,
 }: {
@@ -44,6 +45,8 @@ export function LiveChart({
   intraday: IntradayCandle[];
   points: LivePoint[];
   initialLastPrice: number | null;
+  /** Yesterday's close. The session's own is preferred once a poll has landed. */
+  previousClose: number | null;
   levels: LevelSet | null;
   /** Daily-scale pivots for the daily ranges, intraday-scale for the 1D view. */
   pivots: { daily: PivotLevels | null; intraday: PivotLevels | null };
@@ -75,6 +78,7 @@ export function LiveChart({
       intraday={folded}
       levels={levels}
       pivots={folded.length > 0 ? pivots.intraday : pivots.daily}
+      previousClose={session?.previousClose ?? previousClose}
     />
   );
 }

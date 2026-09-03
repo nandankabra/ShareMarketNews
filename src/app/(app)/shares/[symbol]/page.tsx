@@ -174,6 +174,7 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
             intraday={share.intraday}
             points={share.intradayPoints}
             initialLastPrice={share.lastPrice}
+            previousClose={share.previousClose}
             levels={share.chartLevels}
             pivots={share.pivots}
           />
@@ -213,6 +214,7 @@ export default async function SharePage({ params }: { params: Promise<{ symbol: 
             symbol={share.symbol}
             initialPoints={share.intradayPoints}
             initialLastPrice={share.lastPrice}
+            previousClose={share.previousClose}
             levels={share.chartLevels}
             pivots={share.pivots.intraday}
           />
