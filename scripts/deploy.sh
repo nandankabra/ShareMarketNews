@@ -1,95 +1,74 @@
 #!/usr/bin/env bash
 #
-# One-shot deploy: Turso database, schema, first data load, Vercel app.
+# One-shot deploy to Vercel.
 #
 #   bash scripts/deploy.sh
 #
-# Run the two logins first — they open a browser and only you can complete them:
-#   turso auth login
+# Run the login first — it opens a browser and only you can complete it:
 #   vercel login
 #
 # Safe to re-run. Every step checks whether it has already been done.
+#
+# There is no database step. The deployed app fetches upstream inside the
+# request through src/lib/live/; ACCESS_PASSWORD is the only variable it needs.
+# See docs/HOSTING.md for why the Turso and poller setup this script used to
+# perform is gone.
 
 set -euo pipefail
 
-export PATH="$HOME/.turso:$PATH"
-DB_NAME="${DB_NAME:-watch-desk}"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+VERCEL_PROJECT="${VERCEL_PROJECT:-share-market-news}"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 
-command -v turso  >/dev/null || die "turso CLI not found. curl -sSfL https://get.tur.so/install.sh | bash"
 command -v vercel >/dev/null || die "vercel CLI not found. npm i -g vercel"
+vercel whoami >/dev/null 2>&1 || die "Not logged in to Vercel. Run: vercel login"
 
-turso auth token >/dev/null 2>&1 || die "Not logged in to Turso. Run: turso auth login"
+# --- 1. Checks --------------------------------------------------------------
+# Before the deploy rather than after: a build that fails on Vercel costs a
+# round trip to discover something `tsc` knew instantly.
+say "1/4  Checks"
+npm run check
 
-# --- 1. Database ------------------------------------------------------------
-say "1/5  Turso database"
-if turso db show "$DB_NAME" >/dev/null 2>&1; then
-  echo "     '$DB_NAME' already exists — reusing it"
+# --- 2. Link ----------------------------------------------------------------
+say "2/4  Linking to '$VERCEL_PROJECT'"
+if [ -f .vercel/project.json ]; then
+  echo "     already linked — reusing .vercel/project.json"
 else
-  turso db create "$DB_NAME"
-fi
-
-DB_URL="$(turso db show "$DB_NAME" --url)"
-DB_TOKEN="$(turso db tokens create "$DB_NAME")"
-echo "     $DB_URL"
-
-# --- 2. Schema --------------------------------------------------------------
-say "2/5  Pushing the schema"
-DATABASE_URL="$DB_URL" TURSO_AUTH_TOKEN="$DB_TOKEN" npx prisma migrate deploy
-DATABASE_URL="$DB_URL" TURSO_AUTH_TOKEN="$DB_TOKEN" npm run db:seed
-
-# --- 3. First data load -----------------------------------------------------
-# This MUST run from here rather than from CI: NSE refuses datacenter IPs, so
-# the fetching has to leave from a home connection. See docs/HOSTING.md.
-say "3/5  First data load (from this machine — NSE blocks datacenters)"
-DATABASE_URL="$DB_URL" TURSO_AUTH_TOKEN="$DB_TOKEN" npm run backfill || \
-  echo "     backfill hit an upstream limit; the poller will finish it"
-
-# --- 4. Access password -----------------------------------------------------
-say "4/5  Access password"
-if [ -z "${ACCESS_PASSWORD:-}" ]; then
-  ACCESS_PASSWORD="$(openssl rand -base64 24)"
-  echo "     generated — SAVE THIS, it is how you get in:"
-  printf '\n       \033[1m%s\033[0m\n\n' "$ACCESS_PASSWORD"
-else
-  echo "     using the one already in your environment"
-fi
-
-# --- 5. Deploy --------------------------------------------------------------
-say "5/5  Vercel"
-# Interactive on purpose. `--yes` links to a project named after this folder
-# ("market"), which is NOT necessarily the project you deployed — that silently
-# creates a stray third project. Pick the real one, or set VERCEL_PROJECT.
-if [ -n "${VERCEL_PROJECT:-}" ]; then
+  # Named on purpose. `vercel link --yes` with no project links to one named
+  # after this folder ("market"), which is NOT the project this app deploys to,
+  # and silently creates a stray.
   vercel link --yes --project "$VERCEL_PROJECT" >/dev/null
-else
-  vercel link
+  echo "     linked"
 fi
 
-# Both targets: a preview build that cannot reach the database fails exactly
-# the same way production did, and the error is just as confusing there.
-set_env() {
+# --- 3. Access password -----------------------------------------------------
+# Not optional. The panel has mutating server actions and no user model, so an
+# ungated URL lets a stranger edit the watchlist and drive requests at the
+# upstreams from your deployment. See docs/DEPLOY.md.
+say "3/4  Access password"
+if vercel env ls production 2>/dev/null | grep -q '^ *ACCESS_PASSWORD '; then
+  echo "     already set in production — leaving it alone"
+else
+  PW="${ACCESS_PASSWORD:-$(openssl rand -base64 24)}"
   for tgt in production preview; do
-    vercel env rm "$1" "$tgt" --yes >/dev/null 2>&1 || true
-    printf '%s' "$2" | vercel env add "$1" "$tgt" >/dev/null 2>&1 || true
+    printf '%s' "$PW" | vercel env add ACCESS_PASSWORD "$tgt" >/dev/null 2>&1 || true
   done
-  echo "     set $1 (production + preview)"
-}
-set_env DATABASE_URL     "$DB_URL"
-set_env TURSO_AUTH_TOKEN "$DB_TOKEN"
-set_env ACCESS_PASSWORD  "$ACCESS_PASSWORD"
+  echo "     generated — SAVE THIS, it is how you get in:"
+  printf '\n       \033[1m%s\033[0m\n\n' "$PW"
+fi
 
-vercel --prod
+# --- 4. Deploy --------------------------------------------------------------
+say "4/4  Deploying to production"
+vercel --prod --yes
 
 say "Done."
-cat <<EOF
-     Open the URL above — it should land on /unlock, not the panel.
-     Password: the value printed in step 4.
+cat <<'TXT'
+     Verify: the URL should answer 307 to /unlock, and /api/pulse should be
+     401 {"error":"Locked"}. Then sign in and open /api/probe — it runs every
+     upstream from the deployed host.
 
-     To keep it current, run this on this machine (not in the cloud):
-       DATABASE_URL="$DB_URL" \\
-       TURSO_AUTH_TOKEN="$DB_TOKEN" \\
-       npm run poller
-EOF
+     YAHOO_CHART failing there is expected; see docs/HOSTING.md.
+TXT

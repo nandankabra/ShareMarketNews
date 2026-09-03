@@ -1,27 +1,30 @@
 # Going live
 
-**The short version.** Log in to both services — these open a browser, so only
-you can do them — then run one script:
+**The short version.**
 
 ```bash
-turso auth login
-vercel login
+npm run check
+vercel login          # opens a browser; only you can do this
 bash scripts/deploy.sh
 ```
 
-That creates the database, pushes the schema, loads the first data from this
-machine, generates and sets an access password, and deploys. It is safe to
-re-run; every step checks whether it has already been done.
+That sets an access password if there is not one already, links the project and
+deploys it. It is safe to re-run.
 
-The rest of this page is what that script does, in case you would rather do it
-by hand or something goes wrong.
+There is **no database step**. The deployed app fetches every upstream inside
+the request through the cache in `src/lib/live/`, so there is nothing to
+create, migrate, seed or backfill. `npx next build` with `DATABASE_URL` unset
+succeeds; that is the intended configuration. If you are looking for the Turso
+and poller setup this page used to describe, it belongs to the retired split
+architecture — see [`HOSTING.md`](HOSTING.md) for why it went away, and
+[`SETUP.md`](SETUP.md) if you want to run the poller for self-hosting anyway.
 
 ## Before you deploy — read this one
 
 The app has **no user model by design**, but a deployed URL is reachable by
 anyone who finds it, and the panel has mutating server actions: edit the
 watchlist, trigger a refresh. Left open, a stranger could not only change your
-list but drive traffic at Yahoo and Google *from your deployment* — the exact
+list but drive traffic at NSE and Google *from your deployment* — the exact
 thing the politeness layer exists to prevent.
 
 So **`ACCESS_PASSWORD` is not optional in production.** Unset it locally (no
@@ -31,87 +34,60 @@ gate, no friction); set it before the first deploy.
 openssl rand -base64 24
 ```
 
-## 1. Database — Turso
+The cookie holds a SHA-256 of the password rather than a server-side session,
+so there is nothing to store and nothing to revoke.
+
+## By hand
 
 ```bash
-curl -sSfL https://get.tur.so/install.sh | bash
-turso auth signup
-turso db create watch-desk
-turso db show watch-desk --url          # libsql://watch-desk-<you>.turso.io
-turso db tokens create watch-desk       # the auth token
+npm run check
+vercel link                                    # pick the existing project
+printf '%s' "$PW" | vercel env add ACCESS_PASSWORD production
+printf '%s' "$PW" | vercel env add ACCESS_PASSWORD preview
+vercel --prod
 ```
 
-Push the schema. Prisma migrations run over the libSQL URL directly:
-
-```bash
-DATABASE_URL="libsql://…" TURSO_AUTH_TOKEN="…" npx prisma migrate deploy
-DATABASE_URL="libsql://…" TURSO_AUTH_TOKEN="…" npm run db:seed
-```
-
-Nothing about the schema changes between a local file and Turso — libSQL *is*
-SQLite. `src/lib/prisma.ts` picks the adapter off the URL scheme by itself.
-
-## 2. First data load
-
-Run this **from your own machine**, not from CI. NSE blocks datacenter IPs, so
-this is the one step that must leave from a home connection:
-
-```bash
-DATABASE_URL="libsql://…" TURSO_AUTH_TOKEN="…" npm run backfill
-```
-
-## 3. The app — Vercel
-
-```bash
-npx vercel            # link the project
-npx vercel --prod
-```
-
-Set these in **Project → Settings → Environment Variables**:
-
-| Variable | Value |
-|---|---|
-| `DATABASE_URL` | `libsql://…` |
-| `TURSO_AUTH_TOKEN` | the token from step 1 |
-| `ACCESS_PASSWORD` | the password you generated |
-
-Nothing else is required. The deployed app only ever reads the database — it
-runs no cron, no background work and makes no upstream calls, so none of
-Vercel's free-plan limits are in play.
-
-## 4. Keeping it current
-
-The poller stays on your machine. It writes to Turso; the site reads from it.
-
-```bash
-DATABASE_URL="libsql://…" TURSO_AUTH_TOKEN="…" npm run poller
-```
-
-To have it start with your Mac, `launchd` is the least surprising option — a
-plist calling `npm run poller` in this directory with `KeepAlive`.
-
-When it is not running the site stays up and serves the last sync behind its
-staleness banner. That is designed behaviour, not an outage.
+`ACCESS_PASSWORD` is the only variable the deployed app needs. Preview gets it
+too, on purpose: an unguarded preview URL is exactly as reachable as an
+unguarded production one.
 
 ## Verify the deploy
 
-1. Open the URL — you should land on `/unlock`, not the panel.
-2. Enter the password. `/sectors` should show 16 cards with index levels.
-3. `curl https://your-app.vercel.app/api/pulse` → `401 {"error":"Locked"}`.
-4. `/health` should list every source. Rows will read `NEVER RUN` until the
-   poller has written from your machine — the backfill in step 2 populates the
-   first ones.
+The first three need no password — they are checking that the gate is on.
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://<app>/    # 307 → /unlock
+curl -s https://<app>/api/pulse                                            # 401 {"error":"Locked"}
+curl -s -o /dev/null -w '%{http_code}\n' https://<app>/unlock              # 200
+```
+
+Then let yourself in and check the panel renders. The cookie is derived, so you
+can mint it without a browser:
+
+```bash
+TOKEN=$(printf 'watch-desk:%s' "$PW" | shasum -a 256 | cut -d' ' -f1)
+for p in / /sectors /watchlist /options /health; do
+  curl -s -o /dev/null -w "$p -> %{http_code}\n" -H "Cookie: wd_access=$TOKEN" "https://<app>$p"
+done
+```
+
+Finally `GET /api/probe` (same cookie) runs every upstream from the deployed
+host and prints a row each. That is the page to open first whenever anything
+looks wrong — it separates "an upstream changed" from "we broke it".
 
 ## What will look wrong at first, and is not
 
-- **Prices show `—`.** Yahoo rate-limits by IP and it can last hours. `/health`
-  names it as `BLOCKED` with a retry time. It clears on its own.
-- **`0 bars` on share pages.** Daily bars land at 16:15 IST via the poller.
-- **NSE rows fail if you ever run the poller in the cloud.** They will. That is
-  the constraint in `docs/HOSTING.md`, not a bug.
+- **`YAHOO_CHART` fails in the probe with `BLOCKED — rate limited`.** Expected.
+  Yahoo refuses datacenter IPs; NSE, which everyone assumes is the strict one,
+  answers Vercel fine. [`HOSTING.md`](HOSTING.md) has the measurements. It costs
+  daily bars and the indicators built on them, not the rest of the panel.
+- **Prices show `—` for some rows.** Quotes have no batch endpoint, so a page
+  quotes a bounded number of its constituents and caches each independently.
+  A second visit finds the earlier ones warm.
+- **The watchlist is empty on another device.** It lives in a cookie in one
+  browser. That is the design, not a sync bug.
 
 ## Rotating the password
 
 Change `ACCESS_PASSWORD` in Vercel and redeploy. Existing cookies stop matching
-immediately, since the cookie holds a hash of the password rather than a
-server-side session.
+immediately, since the cookie holds a hash of the password.

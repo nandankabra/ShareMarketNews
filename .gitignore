@@ -17,3 +17,5 @@ prisma/*.db-shm
 .shots/
 prisma/demo.db*
 prisma/smoke.db*
+.vercel
+.env*

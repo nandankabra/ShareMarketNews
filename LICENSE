@@ -1,0 +1,50 @@
+Copyright (c) 2026 Nandan Kabra. All rights reserved.
+
+Watch Desk is a personal project, published for reference only. It is not
+open-source software and it is not offered for commercial use.
+
+PERMITTED
+
+  Reading this source code, and running it unmodified or modified on hardware
+  you control, for your own private, personal, non-commercial purposes.
+
+NOT PERMITTED without prior written permission from the copyright holder
+
+  - Any commercial use, whether or not money changes hands directly. This
+    includes use inside a business, use by or on behalf of a client, and use
+    in any product or service that is sold, licensed, advertised against, or
+    otherwise monetised.
+  - Redistributing, publishing, sublicensing or selling this code or any
+    derivative of it.
+  - Operating a public or multi-tenant instance of it, or otherwise offering
+    its output to third parties.
+
+NO WARRANTY
+
+  This software is provided "as is", without warranty of any kind, express or
+  implied, including but not limited to the warranties of merchantability,
+  fitness for a particular purpose and non-infringement. In no event shall the
+  copyright holder be liable for any claim, damages or other liability, whether
+  in an action of contract, tort or otherwise, arising from, out of or in
+  connection with this software or its use.
+
+NOT FINANCIAL ADVICE
+
+  This software describes publicly available market data. It does not provide
+  investment advice or recommendations, and nothing it outputs is a forecast or
+  a solicitation to buy or sell any security. The author is not a registered
+  investment adviser or research analyst. Verify anything you intend to act on
+  against an official source.
+
+THIRD-PARTY DATA AND CODE
+
+  This licence covers this source code only. It grants no rights whatsoever in
+  the market data the software retrieves. That data belongs to NSE, BSE,
+  NIFTY Indices, Yahoo and Google respectively, is retrieved from their public
+  endpoints, and remains governed by their own terms of use — which generally
+  permit personal viewing while prohibiting redistribution and commercial
+  exploitation. Satisfying yourself of compliance with those terms is your
+  responsibility, not the author's.
+
+  Bundled third-party dependencies remain under their own licences. Charts are
+  rendered by TradingView Lightweight Charts™, licensed Apache-2.0.
