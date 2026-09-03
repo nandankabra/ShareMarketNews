@@ -57,9 +57,16 @@ many people load the page**. That is a stronger guarantee than the per-host
 queue gave, not a weaker one — the queue spaced requests out, this removes
 most of them.
 
-Failures are cached too, for one window. It looks wrong and is not: a rejected
-promise is not cached at all, so a failing upstream would be re-hit on every
-single request, which is exactly the stampede this layer exists to prevent.
+Failures are cached too. It looks wrong and is not: a rejected promise is not
+cached at all, so a failing upstream would be re-hit on every single request,
+which is exactly the stampede this layer exists to prevent.
+
+A failure gets a *shorter* window than a success, though — thirty seconds
+rather than the source's own TTL. They used to share one window, and for the
+option chain that is five minutes, so a single cold start blanked the F&O page
+for five minutes while `/health` reported NSE answering perfectly. One call per
+window however many people are looking still holds; a failure is just retried
+sooner. `FAILURE_TTL_SECONDS` in `src/lib/live/cache.ts`.
 
 TTLs live in `src/lib/live/cache.ts`.
 

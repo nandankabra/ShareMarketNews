@@ -28,8 +28,8 @@ import { ProviderError } from "@/lib/providers/errors";
  * was the buffer and it is more important now that there is no buffer at all. A
  * rejected promise inside `unstable_cache` is also not cached, so a failing
  * upstream would be re-hit on every single request: exactly the stampede this
- * layer exists to prevent. Caching the failure for one window is the polite
- * behaviour.
+ * layer exists to prevent. Caching the failure is the polite behaviour — but
+ * for a shorter window than a success, see `FAILURE_TTL_SECONDS`.
  */
 export type Live<T> =
   | { ok: true; data: T; at: number }
@@ -52,6 +52,21 @@ export function orElse<T>(result: Live<T>, fallback: T): T {
  * so a captured variable that is not named here silently returns another
  * caller's data.
  */
+/**
+ * How long a cached *failure* stands before one request is allowed to retry.
+ *
+ * Failures used to inherit the success TTL. For the option chain that is 300s,
+ * so a single bad call — a cold start, one expired NSE cookie — blanked the F&O
+ * page for five minutes, while `/health` sat there reporting NSE_OPTION_CHAIN as
+ * OK because it asks the upstream directly. The page blamed NSE for something
+ * NSE had not done, which is the exact misdiagnosis this whole layer is meant
+ * to make impossible.
+ *
+ * Thirty seconds rather than zero because the stampede argument above is still
+ * right: without a window, a failing upstream is re-hit by every visitor.
+ */
+const FAILURE_TTL_SECONDS = 30;
+
 export function liveSource<A extends readonly unknown[], T>(
   key: string,
   fn: (...args: A) => Promise<T>,
@@ -67,10 +82,44 @@ export function liveSource<A extends readonly unknown[], T>(
     }
   };
 
-  return unstable_cache(wrapped, [key], {
+  const cached = unstable_cache(wrapped, [key], {
     revalidate: revalidateSeconds,
     tags: [key],
   }) as (...args: A) => Promise<Live<T>>;
+
+  /**
+   * The same call over a second, short-lived entry.
+   *
+   * `unstable_cache` fixes its revalidate window when the entry is built, so a
+   * single entry cannot hold a success for five minutes and a failure for
+   * thirty seconds. Two entries can: this one is consulted only when the long
+   * one is holding a failure, and because it is itself cached, at most one
+   * request per `FAILURE_TTL_SECONDS` reaches the upstream. The guarantee in
+   * docs/HOSTING.md — one call per window however many people are looking —
+   * holds; a failure just gets a shorter window than a success.
+   *
+   * Never longer than the success window: for a source like `quote` (20s) the
+   * long entry already retries faster than this would.
+   */
+  const failureTtl = Math.min(FAILURE_TTL_SECONDS, revalidateSeconds);
+
+  const retried = unstable_cache(wrapped, [key, "retry"], {
+    revalidate: failureTtl,
+    tags: [key],
+  }) as (...args: A) => Promise<Live<T>>;
+
+  return async (...args: A): Promise<Live<T>> => {
+    const first = await cached(...args);
+    if (first.ok) return first;
+
+    // A failure this request just produced is not worth immediately repeating —
+    // consulting the retry entry here would populate it from the same outage
+    // and cost two upstream calls for one page view. Only a failure that has
+    // been standing longer than the failure window earns another attempt.
+    if (Date.now() - first.at < failureTtl * 1000) return first;
+
+    return retried(...args);
+  };
 }
 
 /**

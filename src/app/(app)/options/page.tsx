@@ -42,8 +42,8 @@ export default async function OptionsPage({
       <PageShell>
         <PageHeader eyebrow="Derivatives" title="Option chain" />
         <EmptyState
-          title={`No chain captured for ${symbol}`}
-          description="NSE did not return a chain for this underlying. Chains are re-read every five minutes; check /health to see whether NSE is answering at all."
+          title={`No chain to show for ${symbol}`}
+          description="The last read of this chain did not come back usable. It retries within about half a minute, so a reload shortly will usually have it — /health asks NSE directly and says whether the problem is upstream or ours."
         />
       </PageShell>
     );
