@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ActionsAheadPanel } from "@/components/briefing/actions-ahead";
 import { BriefingSection } from "@/components/briefing/briefing-section";
 import { NewsPulse } from "@/components/briefing/news-pulse";
 import { PageHeader, PageShell } from "@/components/layout/page-header";
@@ -7,6 +8,7 @@ import { StaleBanner } from "@/components/market/stale-banner";
 import { EmptyState } from "@/components/states";
 import { serverNow } from "@/lib/server-now";
 import { getBriefing } from "@/lib/services/briefing/queries";
+import { getActionsAhead } from "@/lib/services/corporate/queries";
 import { getMarketHeader } from "@/lib/services/market/queries";
 
 /**
@@ -34,6 +36,11 @@ function humanDate(dayKey: string): string {
 export default async function TodayPage() {
   const [briefing, header, now] = await Promise.all([getBriefing(), getMarketHeader(), serverNow()]);
 
+  // After the briefing rather than alongside it: both reach NSE, and every
+  // outbound request is serialized per host, so adding this to the Promise.all
+  // above would queue behind it while pretending to be parallel.
+  const actionsAhead = await getActionsAhead();
+
   const total =
     briefing.happeningToday.length +
     briefing.tomorrowEntries.length +
@@ -58,6 +65,11 @@ export default async function TodayPage() {
           movement alone. Scheduled board meetings and ex-dates are missing.
         </div>
       ) : null}
+
+      {/* Above the fork on purpose. A dividend or a buyback is scheduled whether
+          or not anything is moving today, and a quiet market is exactly when
+          the only thing worth reading is what is coming. */}
+      <ActionsAheadPanel data={actionsAhead} today={briefing.today} />
 
       {total === 0 ? (
         <EmptyState

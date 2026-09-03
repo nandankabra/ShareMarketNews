@@ -41,8 +41,29 @@ export async function fetchEventCalendar(): Promise<UpcomingEvent[]> {
   return parseEventCalendar(body);
 }
 
-export async function fetchCorporateActions(): Promise<CorporateAction[]> {
-  const body = await nseApiFetch("api/corporates-corporateActions?index=equities", {
+/** NSE's date parameters want DD-MM-YYYY; our day keys are YYYY-MM-DD. */
+function toNseParamDate(dayKey: string): string {
+  const [year, month, day] = dayKey.split("-");
+  return `${day}-${month}-${year}`;
+}
+
+/**
+ * Corporate actions — dividends, buybacks, splits — with their ex-dates.
+ *
+ * Without a window NSE answers with a very short one: on the day this was
+ * written that was twenty rows, all dividends going ex within about a week,
+ * and not a single buyback. Buybacks are rare enough that a week of them is
+ * usually none, so a caller that wants to know whether one is coming has to
+ * ask for a month. The same month of rows carries the dividends too, which is
+ * why this is one call rather than one per subject.
+ */
+export async function fetchCorporateActions(
+  window?: { from: string; to: string },
+): Promise<CorporateAction[]> {
+  const range = window
+    ? `&from_date=${toNseParamDate(window.from)}&to_date=${toNseParamDate(window.to)}`
+    : "";
+  const body = await nseApiFetch(`api/corporates-corporateActions?index=equities${range}`, {
     source: "NSE_CORPORATE_ACTIONS",
     referer: ACTIONS_PAGE,
   });

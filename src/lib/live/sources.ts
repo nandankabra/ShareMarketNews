@@ -6,6 +6,7 @@ import { fetchNews } from "@/lib/providers/googlenews";
 import { fetchConstituents } from "@/lib/providers/niftyindices";
 import {
   fetchAllIndices,
+  fetchCorporateActions,
   fetchEventCalendar,
   fetchHistorical,
   fetchMarketStatus,
@@ -71,6 +72,20 @@ export const liveConstituents = liveSource(
 );
 
 export const liveEvents = liveSource("event-calendar", async () => fetchEventCalendar(), TTL.events);
+
+/**
+ * Dividends, buybacks and splits going ex inside a window.
+ *
+ * The window is an argument rather than a constant so it lands in the cache key
+ * — a month asked for today and the same month asked for tomorrow are different
+ * questions, and sharing one entry between them would serve yesterday's answer
+ * after midnight.
+ */
+export const liveCorporateActions = liveSource(
+  "corporate-actions",
+  async (from: string, to: string) => fetchCorporateActions({ from, to }),
+  TTL.events,
+);
 
 /**
  * One share's quote and its price history, from a single upstream response.
