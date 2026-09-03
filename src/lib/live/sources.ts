@@ -9,6 +9,7 @@ import {
   fetchCorporateActions,
   fetchEventCalendar,
   fetchHistorical,
+  fetchIndexHistory,
   fetchMarketStatus,
   fetchOptionChain,
   fetchOptionExpiries,
@@ -64,6 +65,18 @@ export const liveMarketStatus = liveSource(
 );
 
 export const liveIndices = liveSource("all-indices", async () => fetchAllIndices(), TTL.indices);
+
+/**
+ * Daily bars for an index.
+ *
+ * Same window as a share's candles: these change once a day, and the level in
+ * the header is where the live number comes from.
+ */
+export const liveIndexHistory = liveSource(
+  "index-history",
+  async (indexName: string) => fetchIndexHistory(indexName),
+  TTL.candles,
+);
 
 export const liveConstituents = liveSource(
   "constituents",

@@ -1,6 +1,7 @@
 import { nseApiFetch } from "./session";
 import { parseAllIndices, type IndexLevel } from "./parse-all-indices";
 import { parseCorporateActions, type CorporateAction } from "./parse-corporate-actions";
+import { parseIndexHistory } from "./parse-index-history";
 import { parseEventCalendar, type UpcomingEvent } from "./parse-event-calendar";
 import { parseMarketStatus, type MarketStatus } from "./parse-market-status";
 import { parseHistorical, type HistoricalBar } from "./parse-historical";
@@ -132,6 +133,44 @@ export async function fetchHistorical(symbol: string, days = 420): Promise<Histo
   );
 
   return parseHistorical(body, symbol);
+}
+
+/** NSE's index history wants DD-MM-YYYY, like its other date parameters. */
+function toIndexRange(date: Date): string {
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${day}-${month}-${date.getUTCFullYear()}`;
+}
+
+/**
+ * Daily bars for an index, e.g. "NIFTY 50".
+ *
+ * Note the `historicalOR` prefix: `api/historical/indicesHistory`, which is the
+ * path the documentation and every example uses, answers 503 from here. Only
+ * this one works.
+ *
+ * Ninety days, and not more, because the endpoint caps its answer at seventy
+ * rows and fills them from the *start* of the range. Asking for two hundred
+ * days returns seventy bars ending three months ago — a complete, plausible,
+ * silently stale chart. Ninety days comes back short of the cap, so the series
+ * runs to yesterday. Widening this without checking the last bar's date is how
+ * the chart quietly stops moving.
+ */
+export async function fetchIndexHistory(indexName: string, days = 90): Promise<HistoricalBar[]> {
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 86_400_000);
+
+  const body = await nseApiFetch(
+    `api/historicalOR/indicesHistory` +
+      `?indexType=${encodeURIComponent(indexName)}` +
+      `&from=${toIndexRange(from)}&to=${toIndexRange(to)}`,
+    {
+      source: "NSE_INDEX_HISTORY",
+      referer: "https://www.nseindia.com/reports-indices-historical-index-data",
+    },
+  );
+
+  return parseIndexHistory(body, indexName);
 }
 
 export type { HistoricalBar };

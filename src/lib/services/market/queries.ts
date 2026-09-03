@@ -1,6 +1,7 @@
 import "server-only";
 
-import { liveMarketStatus } from "@/lib/live/sources";
+import { liveIndexHistory, liveMarketStatus } from "@/lib/live/sources";
+import type { ShareCandle } from "@/lib/services/shares/queries";
 
 /**
  * Header state: is the market open, and where is the Nifty.
@@ -33,5 +34,41 @@ export async function getMarketHeader() {
     capturedAt: new Date(status.at),
     quotesLastSuccessAt: new Date(status.at),
     error: null as string | null,
+  };
+}
+
+/** The index the header already reports, so the chart and the level agree. */
+const NIFTY = "NIFTY 50";
+
+export type IndexChart = {
+  name: string;
+  candles: ShareCandle[];
+};
+
+/**
+ * Daily bars for the Nifty, for the chart on the briefing.
+ *
+ * Daily and not intraday because there is no intraday source that answers:
+ * `chart-databyindex` returns an empty series for every spelling of the index
+ * name, so the only index data NSE will part with is end-of-day. The header
+ * carries the live level; this carries where it has been.
+ *
+ * Returns null rather than throwing so a missing chart costs the briefing
+ * nothing — the page above it is the point.
+ */
+export async function getNiftyChart(): Promise<IndexChart | null> {
+  const history = await liveIndexHistory(NIFTY);
+  if (!history.ok || history.data.length === 0) return null;
+
+  return {
+    name: NIFTY,
+    candles: history.data.map((bar) => ({
+      time: bar.day,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+      volume: bar.volume,
+    })),
   };
 }

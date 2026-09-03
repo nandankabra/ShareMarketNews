@@ -91,6 +91,9 @@ export const SourceKey = union([
   "NIFTY_CONSTITUENTS",
   /** Daily OHLC straight from NSE — the candles and every indicator sit on it. */
   "NSE_HISTORICAL",
+  /** Daily OHLC for an index. A different endpoint and shape from the above:
+   *  the equity one is pinned to series=EQ and returns nothing for NIFTY 50. */
+  "NSE_INDEX_HISTORY",
   "YAHOO_QUOTES",
   /** Post-close bars + indicators. Separate from YAHOO_QUOTES on purpose: they
    *  share an upstream but not a schedule, and one bookkeeping row cannot carry

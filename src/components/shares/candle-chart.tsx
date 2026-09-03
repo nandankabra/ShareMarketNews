@@ -768,7 +768,10 @@ export function CandleChart({
               <span className="text-muted-foreground flex items-center gap-1.5">
                 <i className="block h-0.5 w-3 rounded-full bg-[#5B7A99] dark:bg-[#7FA3C4]" aria-hidden /> SMA 50
               </span>
-              {levelCount > 0 ? (
+              {/* Only when levels were actually handed in. The index chart passes
+                  none, and a legend naming lines that are not on the canvas
+                  sends someone hunting for a support level that never existed. */}
+              {levelCount > 0 && (levels?.supports?.length || levels?.resistances?.length) ? (
                 <>
                   <span className="text-muted-foreground flex items-center gap-1.5">
                     <i className="bg-down block h-0.5 w-3 rounded-full" aria-hidden /> Resistance

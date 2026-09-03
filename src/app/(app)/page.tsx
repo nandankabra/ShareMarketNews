@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { ActionsAheadPanel } from "@/components/briefing/actions-ahead";
 import { BriefingSection } from "@/components/briefing/briefing-section";
+import { NiftyChart } from "@/components/briefing/nifty-chart";
 import { NewsPulse } from "@/components/briefing/news-pulse";
 import { PageHeader, PageShell } from "@/components/layout/page-header";
 import { StaleBanner } from "@/components/market/stale-banner";
@@ -9,7 +10,7 @@ import { EmptyState } from "@/components/states";
 import { serverNow } from "@/lib/server-now";
 import { getBriefing } from "@/lib/services/briefing/queries";
 import { getActionsAhead } from "@/lib/services/corporate/queries";
-import { getMarketHeader } from "@/lib/services/market/queries";
+import { getMarketHeader, getNiftyChart } from "@/lib/services/market/queries";
 
 /**
  * Vercel defaults server functions to ten seconds. On a cold cache this page
@@ -40,6 +41,7 @@ export default async function TodayPage() {
   // outbound request is serialized per host, so adding this to the Promise.all
   // above would queue behind it while pretending to be parallel.
   const actionsAhead = await getActionsAhead();
+  const nifty = await getNiftyChart();
 
   const total =
     briefing.happeningToday.length +
@@ -65,6 +67,14 @@ export default async function TodayPage() {
           movement alone. Scheduled board meetings and ex-dates are missing.
         </div>
       ) : null}
+
+      {/* The broadest context on the page, so it leads: where the index has
+          been, before which individual shares are worth a look. */}
+      <NiftyChart
+        chart={nifty}
+        level={header.niftyLevel}
+        changePercent={header.niftyChangePercent}
+      />
 
       {/* Above the fork on purpose. A dividend or a buyback is scheduled whether
           or not anything is moving today, and a quiet market is exactly when
